@@ -3,7 +3,8 @@ name: macOS app
 # Builds Bubblecast for Mac on GitHub's macOS runners:
 # - every push and pull request: self-checks plus a universal build, with the DMG kept as a workflow artifact
 # - every published release: the DMG and its checksum are attached to that release
-# - manual run with a release tag: rebuilds that tag and attaches the DMG to its release
+# - manual run with a release tag: builds the branch you run it on and attaches the DMG to that existing release
+#   (use it only when the branch's app source and VERSION match the release)
 
 on:
   push:
@@ -14,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Existing release tag to attach the DMG to (for example v1.0.0). Leave empty to only build."
+        description: "Existing release tag to attach this branch's DMG to (for example v1.0.0). Leave empty to only build."
         required: false
         default: ""
 
@@ -30,8 +31,16 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag != '' && inputs.release_tag || github.ref }}
+
+      - name: Match VERSION to the release tag
+        if: env.RELEASE_TAG != ''
+        run: |
+          expected="${RELEASE_TAG#v}"
+          actual="$(tr -d '[:space:]' < VERSION)"
+          if [ "$expected" != "$actual" ]; then
+            echo "VERSION is $actual but the release tag is $RELEASE_TAG; refusing to attach a mismatched DMG." >&2
+            exit 1
+          fi
 
       - name: Show toolchain
         run: |
