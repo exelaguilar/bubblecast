@@ -1,0 +1,36 @@
+# macOS build output and metadata
+.DS_Store
+*.app/
+*.dSYM/
+macos/AppIcon.png
+macos/DerivedData/
+macos/.build/
+.swiftpm/
+
+# Windows build output (the reviewed baseline binaries in windows/release are tracked)
+windows/build/
+*.pdb
+*.ilk
+*.obj
+*.user
+
+# Local configuration, credentials, databases, and logs
+.env
+.env.*
+*.token
+token.txt
+chat.db
+chat.db-wal
+chat.db-shm
+*.log
+*.tmp
+*.bak
+
+# Editor / OS state
+.idea/
+.vscode/
+Thumbs.db
+Desktop.ini
+
+# Release binaries are published on GitHub Releases, not committed
+windows/release/
