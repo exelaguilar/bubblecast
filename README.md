@@ -9,14 +9,14 @@ A tiny, private relay that turns new messages on your Mac into native Windows no
 over your own network, with nothing in the cloud.
 
 [![Latest release](https://img.shields.io/github/v/release/exelaguilar/bubblecast?label=release&color=0EB5A6)](https://github.com/exelaguilar/bubblecast/releases/latest)
-![macOS 15](https://img.shields.io/badge/macOS-15%20Sequoia-2B8CF5?logo=apple&logoColor=white)
+![macOS 15](https://img.shields.io/badge/macOS-15%20Sequoia%20%C2%B7%20universal-2B8CF5?logo=apple&logoColor=white)
 ![Windows 10/11](https://img.shields.io/badge/Windows-10%20%7C%2011-2B8CF5?logo=windows&logoColor=white)
 ![Dependencies](https://img.shields.io/badge/dependencies-zero-0EB5A6)
 ![LAN only](https://img.shields.io/badge/network-LAN%20only-0EB5A6)
 [![MIT license](https://img.shields.io/badge/license-MIT-2B8CF5)](LICENSE)
 
-[**Download for Windows**](https://github.com/exelaguilar/bubblecast/releases/latest) ·
-[Mac setup](docs/MAC.md) ·
+[**Download for Windows and Mac**](https://github.com/exelaguilar/bubblecast/releases/latest) ·
+[Mac guide](docs/MAC.md) ·
 [Windows guide](docs/WINDOWS.md) ·
 [How it's secured](#-private-by-design)
 
@@ -66,15 +66,9 @@ Attachments, message history, and your Apple ID never leave the Mac.
 
 > Windows SmartScreen may warn on first run because the app isn't code-signed. Choose **More info → Run anyway**, or build it yourself from source.
 
-**2. Mac** — On the Mac or macOS VM, clone this repo and build:
+**2. Mac** — Download the **Bubblecast .dmg** from the same release, open it, and drag **Bubblecast** to **Applications**. Then grant **Full Disk Access** (so it can read Messages) and, optionally, **Contacts** (for sender names).
 
-```sh
-git clone https://github.com/exelaguilar/bubblecast.git
-cd bubblecast
-bash macos/build.command
-```
-
-Then grant **Full Disk Access** (so it can read Messages) and, optionally, **Contacts** (for sender names).
+> Bubblecast isn't signed with an Apple Developer ID, so the first launch is blocked. Open **System Settings → Privacy & Security**, scroll to the message about Bubblecast, and click **Open Anyway**. You only need to do this once per version.
 
 **3. Pair** — Paste the Windows address and pairing token into the Mac app, click **Save**, then **Send test**. A notification on your PC means you're done. 🎉
 
@@ -118,7 +112,7 @@ Wire format and test vectors: [docs/PROTOCOL.md](docs/PROTOCOL.md).
 
 | | |
 | --- | --- |
-| **Mac** | macOS 15 Sequoia on Intel (a Mac or a macOS VM), signed in to Messages. Xcode Command Line Tools to build. |
+| **Mac** | macOS 15 Sequoia on Intel or Apple Silicon (a Mac or a macOS VM), signed in to Messages. |
 | **Windows** | Windows 10 or 11 with .NET Framework 4.x (built in). |
 | **Network** | Both machines on the same trusted LAN. |
 
@@ -138,10 +132,13 @@ cmd /c windows\build.cmd test
 ```
 
 ```sh
-# macOS, inside the Mac or VM
-bash macos/build.command test   # pure-logic self-checks
-bash macos/build.command        # build, install to ~/Applications, and launch
+# macOS (needs the Xcode Command Line Tools)
+bash macos/build.command test      # pure-logic self-checks
+bash macos/build.command           # build for this Mac, install to ~/Applications, and launch
+bash macos/build.command package   # universal app and dist/Bubblecast-<version>.dmg
 ```
+
+Every push is built and checked on GitHub's macOS runners, and each release gets its Mac disk image from the same workflow.
 
 ## Project docs
 

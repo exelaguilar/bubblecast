@@ -11,6 +11,7 @@ First public release of Bubblecast.
 - Skips old, undated, and iCloud-synced rows; de-duplicates; retries with backoff and sends one count-only catch-up alert after Windows was unreachable.
 - Pairing token in the Keychain; HMAC-SHA256 signed requests; optional TLS pinned to the Windows certificate's SHA-256 fingerprint.
 - SwiftUI settings with status, pairing, notifications, and an Advanced section (name overrides, open at login, privacy-safe diagnostics); light and dark appearance.
+- Universal (Intel and Apple Silicon) disk image built by GitHub Actions and attached to each release.
 
 ### Windows (tray app and Setup)
 

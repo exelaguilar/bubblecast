@@ -1,22 +1,33 @@
 # Bubblecast for Mac — full guide
 
-Bubblecast for Mac is a SwiftUI menu-bar app for macOS 15 Sequoia on Intel (a Mac or a macOS VM). It reads the Messages database read-only, filters out old and duplicate rows, optionally resolves contact names, and sends signed notifications to Bubblecast for Windows on your LAN.
+Bubblecast for Mac is a SwiftUI menu-bar app for macOS 15 Sequoia on Intel or Apple Silicon (a Mac or a macOS VM). It reads the Messages database read-only, filters out old and duplicate rows, optionally resolves contact names, and sends signed notifications to Bubblecast for Windows on your LAN.
 
-## Build and install
+## Install
 
-Clone the repository on the Mac (or copy the `macos/` folder and the root `VERSION` file side by side), then run from the repository root:
+1. Download **Bubblecast-<version>.dmg** from the [latest release](https://github.com/exelaguilar/bubblecast/releases/latest).
+2. Open it and drag **Bubblecast** to **Applications**.
+3. Open Bubblecast. Bubblecast isn't signed with an Apple Developer ID, so the first launch is blocked. Open **System Settings → Privacy & Security**, scroll to the message about Bubblecast, and click **Open Anyway**. You only need to do this once per version.
+
+Bubblecast appears in the menu bar, not the Dock. The disk image contains a universal app for Intel and Apple Silicon, built by GitHub Actions from the release's source.
+
+Because the app isn't Developer ID–signed, each new version has a different code signature, and macOS may ask you to grant Full Disk Access again after updating.
+
+## Build from source
+
+With the Xcode Command Line Tools installed, run from the repository root:
 
 ```sh
-bash macos/build.command
+bash macos/build.command           # build for this Mac, install to ~/Applications/Bubblecast.app, and launch
+bash macos/build.command package   # universal app and dist/Bubblecast-<version>.dmg (installs nothing)
 ```
 
-The script builds the icon set from `macos/Resources/AppIcon-1024.png`, compiles the app for Intel macOS 15, signs it ad hoc, asks a running copy to quit, installs it to `~/Applications/Bubblecast.app`, and opens it. It needs the Xcode Command Line Tools. Terminal is only needed for building.
+The script builds the icon set from `macos/Resources/AppIcon-1024.png`, compiles for macOS 15, signs ad hoc, and (in install mode) asks a running copy to quit before replacing it.
 
-To sign with a stable identity instead of ad hoc, set `RELAY_SIGN_IDENTITY` to the name of a signing identity in your Keychain before building. A new identity may require granting Full Disk Access and Contacts again.
+To sign with a stable identity instead of ad hoc, set `RELAY_SIGN_IDENTITY` to the name of a signing identity in your Keychain before building. A stable identity keeps Full Disk Access and Contacts permissions across updates.
 
 ## Permissions
 
-- **Full Disk Access** (required): **System Settings → Privacy & Security → Full Disk Access**, then add `~/Applications/Bubblecast.app`. This lets the app read `~/Library/Messages/chat.db`.
+- **Full Disk Access** (required): **System Settings → Privacy & Security → Full Disk Access**, then add Bubblecast (`/Applications/Bubblecast.app`, or `~/Applications/Bubblecast.app` if you built it yourself). This lets the app read `~/Library/Messages/chat.db`.
 - **Contacts** (optional): allow it to show sender names. Without it, notifications are generic unless you add name overrides.
 - **Local Network**: allow it if macOS asks.
 
@@ -71,7 +82,8 @@ See the [protocol notes and test vectors](PROTOCOL.md) for the request format sh
 
 ## Troubleshooting
 
-- **"Can't read Messages"**: grant Full Disk Access to `~/Applications/Bubblecast.app` and relaunch it.
+- **"Can't read Messages"**: grant Full Disk Access to Bubblecast (remove and re-add it after an update) and relaunch it.
+- **"Bubblecast can't be opened"**: use **Open Anyway** in **System Settings → Privacy & Security**.
 - **Rejected — check the pairing token or Mac clock**: re-copy the token from Windows, and make sure both clocks are within two minutes of each other.
 - **Unreachable**: check the Windows address, that Bubblecast is running on Windows, and that the Windows firewall allows the port on your private network.
 - **Copy privacy-safe diagnostics** (under Advanced) copies counts and status only. It excludes addresses, tokens, sender names, and message text.

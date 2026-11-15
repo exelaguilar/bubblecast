@@ -34,3 +34,6 @@ Desktop.ini
 
 # Release binaries are published on GitHub Releases, not committed
 windows/release/
+
+# macOS package output (bash macos/build.command package)
+dist/

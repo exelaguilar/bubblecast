@@ -1,0 +1,70 @@
+name: macOS app
+
+# Builds Bubblecast for Mac on GitHub's macOS runners:
+# - every push and pull request: self-checks plus a universal build, with the DMG kept as a workflow artifact
+# - every published release: the DMG and its checksum are attached to that release
+# - manual run with a release tag: rebuilds that tag and attaches the DMG to its release
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing release tag to attach the DMG to (for example v1.0.0). Leave empty to only build."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag != '' && inputs.release_tag || github.ref }}
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          swiftc --version
+
+      - name: Self-checks
+        run: bash macos/build.command test
+
+      - name: Build universal app and DMG
+        run: bash macos/build.command package
+
+      - name: Inspect the app
+        run: |
+          set -euo pipefail
+          hdiutil attach dist/Bubblecast-*.dmg -nobrowse -readonly -mountpoint /tmp/bubblecast-dmg
+          lipo -info /tmp/bubblecast-dmg/Bubblecast.app/Contents/MacOS/Bubblecast
+          codesign --verify --strict --verbose=2 /tmp/bubblecast-dmg/Bubblecast.app
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' -c 'Print :CFBundleShortVersionString' /tmp/bubblecast-dmg/Bubblecast.app/Contents/Info.plist
+          hdiutil detach /tmp/bubblecast-dmg
+
+      - name: Keep the DMG as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Bubblecast-macOS
+          path: |
+            dist/*.dmg
+            dist/*.sha256
+          if-no-files-found: error
+
+      - name: Attach to the release
+        if: env.RELEASE_TAG != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$RELEASE_TAG" dist/*.dmg dist/*.sha256 --clobber --repo "$GITHUB_REPOSITORY"
