@@ -29,7 +29,7 @@ jobs:
       RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag }}
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag != '' && inputs.release_tag || github.ref }}
 
@@ -55,7 +55,7 @@ jobs:
           hdiutil detach /tmp/bubblecast-dmg
 
       - name: Keep the DMG as a workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: Bubblecast-macOS
           path: |
