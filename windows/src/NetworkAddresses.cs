@@ -29,6 +29,32 @@ namespace Bubblecast
             return result.Distinct().ToList();
         }
 
+        /// <summary>The IPv4 address of the first active adapter with a default gateway that isn't virtual, or null.</summary>
+        public static IPAddress PrimaryLanIPv4()
+        {
+            try
+            {
+                foreach (NetworkInterface nic in NetworkInterface.GetAllNetworkInterfaces())
+                {
+                    if (nic.OperationalStatus != OperationalStatus.Up || nic.NetworkInterfaceType == NetworkInterfaceType.Tunnel) continue;
+                    string label = nic.Name + " " + nic.Description;
+                    if (label.IndexOf("Hyper-V", StringComparison.OrdinalIgnoreCase) >= 0 || label.IndexOf("WSL", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        label.IndexOf("VPN", StringComparison.OrdinalIgnoreCase) >= 0 || label.IndexOf("Virtual", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                    IPInterfaceProperties properties = nic.GetIPProperties();
+                    if (!properties.GatewayAddresses.Any(delegate(GatewayIPAddressInformation g) { return g.Address != null && g.Address.AddressFamily == AddressFamily.InterNetwork && !IPAddress.Any.Equals(g.Address); }))
+                        continue;
+                    foreach (UnicastIPAddressInformation address in properties.UnicastAddresses)
+                    {
+                        if (address.Address.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(address.Address) &&
+                            !address.Address.ToString().StartsWith("169.254.", StringComparison.Ordinal))
+                            return address.Address;
+                    }
+                }
+            }
+            catch (NetworkInformationException) { }
+            return null;
+        }
+
         /// <summary>Blank (all adapters) or one of this PC's current IPv4 addresses.</summary>
         public static bool IsUsableListenAddress(string value)
         {

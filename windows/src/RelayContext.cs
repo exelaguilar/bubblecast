@@ -80,6 +80,8 @@ namespace Bubblecast
         private bool _lastNotificationWasNotice;
         private volatile string _listenAddress = "";
         private int _listenerGeneration;
+        private bool _discoverable = true;
+        private readonly ServiceAnnouncer _announcer = new ServiceAnnouncer();
         private readonly List<RecentNotification> _recentNotifications = new List<RecentNotification>();
         private static readonly TimeSpan MacQuietThreshold = TimeSpan.FromMinutes(5);
         private const int RecentNotificationLimit = 8;
@@ -169,6 +171,7 @@ namespace Bubblecast
             Task.Factory.StartNew(ListenLoop, TaskCreationOptions.LongRunning);
             if (_tlsCertificate != null)
                 Task.Factory.StartNew(ListenTlsLoop, TaskCreationOptions.LongRunning);
+            UpdateAnnouncement();
             if (showSettingsOnLaunch)
                 ShowSettings();
         }
@@ -261,6 +264,7 @@ namespace Bubblecast
                     _clickOpensMacDesktop = Convert.ToInt32(key.GetValue("ClickOpensMacDesktop", 0), CultureInfo.InvariantCulture) != 0;
                     string listen = Convert.ToString(key.GetValue("ListenAddress", ""), CultureInfo.InvariantCulture) ?? "";
                     _listenAddress = NetworkAddresses.IsUsableListenAddress(listen) ? listen.Trim() : "";
+                    _discoverable = Convert.ToInt32(key.GetValue("Discoverable", 1), CultureInfo.InvariantCulture) != 0;
                 }
             }
             catch
@@ -273,7 +277,7 @@ namespace Bubblecast
 
         /// <summary>Saves settings. Returns true when the listen address changed (listeners must restart).</summary>
         private bool SaveSettings(bool quietEnabled, TimeSpan quietStart, TimeSpan quietEnd, string mutedSenders, string macRdpTarget,
-            bool onlyAcceptPairedMacAddress, string pairedMacAddress, bool macQuietAlert, bool clickOpensMacDesktop, string listenAddress)
+            bool onlyAcceptPairedMacAddress, string pairedMacAddress, bool macQuietAlert, bool clickOpensMacDesktop, string listenAddress, bool discoverable)
         {
             listenAddress = (listenAddress ?? "").Trim();
             if (!NetworkAddresses.IsUsableListenAddress(listenAddress))
@@ -299,12 +303,16 @@ namespace Bubblecast
                 key.SetValue("MacQuietAlert", macQuietAlert ? 1 : 0, RegistryValueKind.DWord);
                 key.SetValue("ClickOpensMacDesktop", clickOpensMacDesktop ? 1 : 0, RegistryValueKind.DWord);
                 key.SetValue("ListenAddress", listenAddress, RegistryValueKind.String);
+                key.SetValue("Discoverable", discoverable ? 1 : 0, RegistryValueKind.DWord);
             }
             _macQuietAlertEnabled = macQuietAlert;
             if (!macQuietAlert) _macQuietAlerted = false;
             _clickOpensMacDesktop = clickOpensMacDesktop;
             bool listenChanged = !String.Equals(_listenAddress, listenAddress, StringComparison.Ordinal);
+            bool discoveryChanged = _discoverable != discoverable;
             _listenAddress = listenAddress;
+            _discoverable = discoverable;
+            if (listenChanged || discoveryChanged) UpdateAnnouncement();
             return listenChanged;
         }
 
@@ -513,9 +521,21 @@ namespace Bubblecast
             return addresses.Count == 0 ? "No active IPv4 address found." : String.Join(Environment.NewLine, addresses.ToArray());
         }
 
+        /// <summary>Announces this PC to Macs on the network (or stops) to match the current settings.</summary>
+        private void UpdateAnnouncement()
+        {
+            _announcer.Stop();
+            if (!_discoverable) return;
+            IPAddress address = null;
+            if (!String.IsNullOrEmpty(_listenAddress)) IPAddress.TryParse(_listenAddress, out address);
+            if (address == null) address = NetworkAddresses.PrimaryLanIPv4();
+            _announcer.Start(address, Port, _tlsCertificate != null ? TlsPort : 0);
+        }
+
         protected override void ExitThreadCore()
         {
             _running = false;
+            _announcer.Dispose();
             if (_listener != null)
             {
                 try { _listener.Stop(); } catch { }

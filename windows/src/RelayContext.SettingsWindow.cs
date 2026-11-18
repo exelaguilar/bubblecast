@@ -259,7 +259,7 @@ namespace Bubblecast
 
             // ── Advanced: infrequent maintenance and diagnostics, collapsed by default ──
             CardPanel advancedCard = new CardPanel { Padding = new Padding(8) };
-            DisclosureButton advancedToggle = new DisclosureButton("Advanced", "Remote Desktop override, listen address, allowlist, token rotation, and diagnostics", labelFont, smallFont);
+            DisclosureButton advancedToggle = new DisclosureButton("Advanced", "Discovery, Remote Desktop override, listen address, allowlist, token rotation, and diagnostics", labelFont, smallFont);
             TableLayoutPanel advancedBody = UiLayout.NewStack();
             advancedBody.Padding = new Padding(12, 0, 12, 4);
             advancedBody.Visible = false;
@@ -277,6 +277,10 @@ namespace Bubblecast
             UiLayout.AddLabel(advancedBody, "Mac Remote Desktop address", labelFont);
             UiLayout.AddRow(advancedBody, new FieldHost(rdpTarget, 1));
             UiLayout.AddHelp(advancedBody, "Optional, such as mac-vm.local:3390. Leave blank to use the current Mac relay IP on port 3390.", smallFont);
+
+            UiLayout.AddSeparator(advancedBody);
+            RelaySwitch discoverable = new RelaySwitch { Checked = _discoverable };
+            UiLayout.AddRow(advancedBody, UiLayout.ActionRow("Let the Mac find this PC", "Announces \"" + ServiceAnnouncer.InstanceName + "\" on the local network so the Mac can pair without typing an address.", discoverable, labelFont, smallFont));
 
             UiLayout.AddSeparator(advancedBody);
             TextBox listenAddress = new TextBox { Text = _listenAddress, AccessibleName = "Listen address" };
@@ -377,7 +381,7 @@ namespace Bubblecast
                 try
                 {
                     bool listenChanged = SaveSettings(quietHours.Checked, validatedStart, validatedEnd, mutedSenders.Text, validatedTarget, allowPairedMacOnly.Checked, _lastMacAddress,
-                        macQuietAlert.Checked, clickOpensMac.Checked, listenAddress.Text);
+                        macQuietAlert.Checked, clickOpensMac.Checked, listenAddress.Text, discoverable.Checked);
                     quietStart.Text = QuietHoursText.Format(validatedStart);
                     quietEnd.Text = QuietHoursText.Format(validatedEnd);
                     listenAddress.Text = _listenAddress;
@@ -406,6 +410,7 @@ namespace Bubblecast
             macQuietAlert.CheckedChanged += markUnsaved;
             clickOpensMac.CheckedChanged += markUnsaved;
             listenAddress.TextChanged += markUnsaved;
+            discoverable.CheckedChanged += markUnsaved;
 
             // ── Scrolling body: tracks the window width; two columns when there is room ──
             Panel scroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true, Tag = UiRole.Page };

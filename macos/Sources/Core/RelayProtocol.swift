@@ -27,11 +27,23 @@ enum RelayProtocolV2 {
     }
 }
 
+/// Accepts the Windows receiver's self-signed certificate only when its SHA-256 fingerprint matches the
+/// pinned value. With no expected fingerprint it trusts the first certificate it sees and records its
+/// fingerprint, so the user can compare it with the one Windows shows before pinning it.
 final class RelayPinnedSessionDelegate: NSObject, URLSessionDelegate {
-    private let expectedFingerprint: String
+    private let expectedFingerprint: String?
+    private let lock = NSLock()
+    private var observed: String?
 
-    init(expectedFingerprint: String) {
-        self.expectedFingerprint = RelayPinnedSessionDelegate.normalizeFingerprint(expectedFingerprint)
+    init(expectedFingerprint: String?) {
+        self.expectedFingerprint = expectedFingerprint.map { RelayPinnedSessionDelegate.normalizeFingerprint($0) }
+    }
+
+    /// The fingerprint of the certificate the server presented, once a handshake has started.
+    var observedFingerprint: String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return observed
     }
 
     static func isValidFingerprint(_ value: String) -> Bool {
@@ -53,7 +65,10 @@ final class RelayPinnedSessionDelegate: NSObject, URLSessionDelegate {
         }
         let certificateData = SecCertificateCopyData(certificate) as Data
         let fingerprint = SHA256.hash(data: certificateData).map { String(format: "%02X", $0) }.joined()
-        guard fingerprint == expectedFingerprint else {
+        lock.lock()
+        observed = fingerprint
+        lock.unlock()
+        if let expectedFingerprint, fingerprint != expectedFingerprint {
             completionHandler(.cancelAuthenticationChallenge, nil)
             return
         }

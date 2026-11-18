@@ -194,6 +194,10 @@ struct RelayView: View {
                         .accessibilityLabel("Windows PC address")
                 }
 
+                if !model.discoveredPCs.isEmpty {
+                    discoveredPCsList
+                }
+
                 FormField(label: "Pairing token",
                           help: "64-character token shown on Windows. Stored in the Mac Keychain.") {
                     SecureField("Paste the pairing token", text: $model.pairingToken)
@@ -209,7 +213,7 @@ struct RelayView: View {
                           isOn: $model.useTLS)
 
                 FormField(label: "Windows certificate fingerprint (SHA-256)",
-                          help: "Copy it from the Windows app. The certificate must match exactly.") {
+                          help: "Leave it blank and click Save to learn it from Windows, then check it matches the fingerprint Windows shows. You can also paste it.") {
                     TextField("64 hexadecimal characters", text: $model.tlsCertificateFingerprint)
                         .font(.system(size: 12, design: .monospaced))
                         .focused($focusedField, equals: .fingerprint)
@@ -357,6 +361,38 @@ struct RelayView: View {
             }
         }
         .cardChrome()
+    }
+
+    /// Bubblecast receivers announcing on the local network, each with a one-click "Use".
+    private var discoveredPCsList: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Found on your network")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(RelayTheme.mutedForeground)
+            ForEach(model.discoveredPCs, id: \.self) { name in
+                HStack(spacing: 8) {
+                    Image(systemName: "desktopcomputer")
+                        .foregroundStyle(RelayTheme.mutedForeground)
+                        .accessibilityHidden(true)
+                    Text(name)
+                        .font(.system(size: 12, weight: .medium))
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
+                    if model.windowsAddress == WindowsDiscovery.address(forName: name) {
+                        Label("Selected", systemImage: "checkmark")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(RelayTheme.success)
+                    } else {
+                        Button("Use") { model.useDiscoveredPC(name) }
+                            .buttonStyle(RelayButtonStyle(kind: .secondary))
+                            .accessibilityLabel("Use \(name)")
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(RoundedRectangle(cornerRadius: RelayTheme.controlRadius, style: .continuous).fill(RelayTheme.muted))
+            }
+        }
     }
 
     /// Returns the GridRow itself (not a wrapper view) so Grid aligns its columns.

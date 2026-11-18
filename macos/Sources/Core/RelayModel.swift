@@ -40,11 +40,14 @@ final class RelayModel: ObservableObject {
     @Published private(set) var lastSuccessfulNotification: Date?
     @Published private(set) var contactLookupSummary = "Not checked yet"
     @Published private(set) var timestampUnitSummary = "not observed"
+    /// Names of Bubblecast receivers announcing on the local network.
+    @Published private(set) var discoveredPCs: [String] = []
 
     private let databasePath: String
     private let queue = DispatchQueue(label: "local.bubblecast.database", qos: .utility)
     private let contactStore: CNContactStore
     private let client = RelayClient()
+    private let discovery = WindowsDiscovery()
     private let defaults = UserDefaults.standard
 
     // Main-thread state.
@@ -152,6 +155,9 @@ final class RelayModel: ObservableObject {
             monitor.start()
         }
 
+        discovery.onChange = { [weak self] names in self?.discoveredPCs = names }
+        discovery.start()
+
         requestContactsAccessIfNeeded(enabled: savedSettingsForUI?.includeSenderNames ?? false)
         contactObserver = NotificationCenter.default.addObserver(forName: .CNContactStoreDidChange, object: nil, queue: nil) { [weak self] _ in
             guard let self else { return }
@@ -196,7 +202,41 @@ final class RelayModel: ObservableObject {
             self.checkWindowsHealth()
         }
         setStatus("Settings saved. Monitoring Messages.", level: .ok)
+        if snapshot.useTLS && !RelayPinnedSessionDelegate.isValidFingerprint(snapshot.tlsCertificateFingerprint)
+            && !snapshot.windowsAddress.isEmpty && !snapshot.pairingToken.isEmpty {
+            learnWindowsCertificate(RelayEndpointConfiguration(settings: snapshot))
+        }
         return true
+    }
+
+    /// Fills in a PC found on the network. The pairing token still comes from Windows.
+    func useDiscoveredPC(_ name: String) {
+        windowsAddress = WindowsDiscovery.address(forName: name)
+        useTLS = true
+        if !RelayPinnedSessionDelegate.isValidFingerprint(tlsCertificateFingerprint) { tlsCertificateFingerprint = "" }
+        setStatus("Selected \(name). Paste the pairing token from Bubblecast on Windows, then click Save.", level: .info)
+    }
+
+    /// Trust on first use: learns the certificate Windows presents and fills it in for the user to compare
+    /// with the fingerprint Windows shows. It is pinned only when the user saves it.
+    private func learnWindowsCertificate(_ configuration: RelayEndpointConfiguration) {
+        setStatus("Contacting Windows over TLS to learn its certificate…")
+        client.learnFingerprint(configuration: configuration) { [weak self] fingerprint, outcome, reason in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                guard let fingerprint, RelayPinnedSessionDelegate.isValidFingerprint(fingerprint) else {
+                    self.setStatus("Couldn't reach Windows over TLS: \(reason)", level: .error)
+                    return
+                }
+                self.tlsCertificateFingerprint = fingerprint
+                let suffix = String(fingerprint.suffix(6))
+                if outcome == .rejected {
+                    self.setStatus("Learned the Windows certificate (ends in \(suffix)), but Windows rejected the pairing token. Fix the token, check the fingerprint, then Save.", level: .warning)
+                } else {
+                    self.setStatus("Learned the Windows certificate (ends in \(suffix)). Check that it matches the fingerprint shown on Windows, then click Save to trust it.", level: .warning)
+                }
+            }
+        }
     }
 
     func sendTest() {

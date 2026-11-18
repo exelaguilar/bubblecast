@@ -50,7 +50,7 @@ struct RelaySettings: Equatable {
             maximumMessageAgeMinutes: max(1, min(1440, defaults.object(forKey: RelayPreferences.maximumMessageAgeMinutes) as? Int ?? 10)),
             senderNameOverrides: defaults.string(forKey: RelayPreferences.senderNameOverrides) ?? "",
             notifyForReactions: defaults.object(forKey: RelayPreferences.notifyForReactions) as? Bool ?? false,
-            useTLS: defaults.object(forKey: RelayPreferences.useTLS) as? Bool ?? false,
+            useTLS: defaults.object(forKey: RelayPreferences.useTLS) as? Bool ?? true,
             tlsCertificateFingerprint: defaults.string(forKey: RelayPreferences.tlsCertificateFingerprint) ?? ""
         )
     }
