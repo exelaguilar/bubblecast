@@ -18,9 +18,9 @@ for /f "tokens=1-3 delims=." %%A in ("%APP_VERSION%") do set "APP_VERSION_3=%%A.
 >"build\VersionInfo.cs" echo using System.Reflection;
 >>"build\VersionInfo.cs" echo [assembly: AssemblyVersion("%APP_VERSION_3%.0")]
 >>"build\VersionInfo.cs" echo [assembly: AssemblyFileVersion("%APP_VERSION_3%.0")]
-"%CSC%" /nologo /optimize+ /target:winexe /out:"build\Bubblecast.exe" /win32icon:"Bubblecast.ico" /win32manifest:"app.manifest" /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Core.dll /reference:System.Security.dll /resource:"Bubblecast.ico",Bubblecast.AppIcon.ico /resource:"BrandMark.png",Bubblecast.BrandMark.png "build\VersionInfo.cs" "src\Program.cs" "src\RelayContext.cs" "src\RequestVerifier.cs" "src\DisplayTextSanitizer.cs" "src\StartupShortcut.cs" "src\BoundedHttpRequestReader.cs"
+"%CSC%" /nologo /optimize+ /target:winexe /out:"build\Bubblecast.exe" /win32icon:"Bubblecast.ico" /win32manifest:"app.manifest" /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Core.dll /reference:System.Security.dll /resource:"Bubblecast.ico",Bubblecast.AppIcon.ico /resource:"BrandMark.png",Bubblecast.BrandMark.png "build\VersionInfo.cs" "src\*.cs" "shared\*.cs"
 if errorlevel 1 exit /b 1
-"%CSC%" /nologo /optimize+ /target:winexe /out:"build\Bubblecast Setup.exe" /win32icon:"Bubblecast.ico" /win32manifest:"installer.manifest" /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Core.dll /resource:"build\Bubblecast.exe",BubblecastSetup.Payload.exe /resource:"Bubblecast.ico",BubblecastSetup.Icon.ico /resource:"BrandMark.png",BubblecastSetup.BrandMark.png "build\VersionInfo.cs" "BubblecastSetup.cs"
+"%CSC%" /nologo /optimize+ /target:winexe /out:"build\Bubblecast Setup.exe" /win32icon:"Bubblecast.ico" /win32manifest:"installer.manifest" /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Core.dll /resource:"build\Bubblecast.exe",BubblecastSetup.Payload.exe /resource:"Bubblecast.ico",Bubblecast.AppIcon.ico /resource:"BrandMark.png",Bubblecast.BrandMark.png "build\VersionInfo.cs" "BubblecastSetup.cs" "shared\*.cs"
 if errorlevel 1 exit /b 1
 echo Built:
 echo   %CD%\build\Bubblecast.exe

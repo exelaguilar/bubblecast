@@ -60,7 +60,7 @@ cat > "$CONTENTS/Info.plist" <<PLIST
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>$APP_VERSION</string>
     <key>CFBundleVersion</key><string>$APP_VERSION</string>
-    <key>LSMinimumSystemVersion</key><string>15.0</string>
+    <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>LSUIElement</key><true/>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSLocalNetworkUsageDescription</key>
@@ -97,7 +97,7 @@ enum RelayBuildInfo { static let version = "$APP_VERSION" }
 SWIFT
 
 compile_for() {
-    swiftc -parse-as-library -O -target "$1-apple-macosx15.0" \
+    swiftc -parse-as-library -O -target "$1-apple-macosx13.0" \
         -framework AppKit -framework SwiftUI -framework Combine -framework Contacts -framework CryptoKit -framework ServiceManagement -framework Security -lsqlite3 \
         -o "$2" "$BUILD_TEMP/BuildVersion.swift" "$SOURCE_DIR"/Sources/App/*.swift "$SOURCE_DIR"/Sources/Core/*.swift
 }
