@@ -950,19 +950,19 @@ namespace Bubblecast
 
         internal static void AddHelp(TableLayoutPanel table, string text, Font font)
         {
-            AddRow(table, MakeText(text, UiRole.Muted, font, new Padding(0, 6, 0, 16)));
+            AddRow(table, MakeText(text, UiRole.Muted, font, new Padding(0, 6, 0, 12)));
         }
 
         internal static void AddSeparator(TableLayoutPanel table)
         {
-            AddRow(table, new Hairline { Margin = new Padding(0, 0, 0, 16) });
+            AddRow(table, new Hairline { Margin = new Padding(0, 0, 0, 12) });
         }
 
         internal static CardPanel NewCard(string title, string description, Font titleFont, Font descriptionFont)
         {
             CardPanel card = new CardPanel();
             AddRow(card, MakeText(title, UiRole.Body, titleFont, new Padding(0, 0, 0, 2)));
-            AddRow(card, MakeText(description, UiRole.Muted, descriptionFont, new Padding(0, 0, 0, 18)));
+            AddRow(card, MakeText(description, UiRole.Muted, descriptionFont, new Padding(0, 0, 0, 14)));
             return card;
         }
 
@@ -1001,7 +1001,7 @@ namespace Bubblecast
                 RowCount = 2,
                 AutoSize = true,
                 AutoSizeMode = AutoSizeMode.GrowAndShrink,
-                Margin = new Padding(0, 0, 0, 16),
+                Margin = new Padding(0, 0, 0, 12),
                 Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top
             };
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));

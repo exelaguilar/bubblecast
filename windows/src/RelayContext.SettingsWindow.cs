@@ -46,7 +46,7 @@ namespace Bubblecast
             form.AutoScaleMode = AutoScaleMode.Dpi;
             form.Font = baseFont;
             // Wide enough for Pairing and Notifications side by side, so the default view needs no scrolling.
-            form.ClientSize = new Size(1080, 780);
+            form.ClientSize = new Size(1080, 800);
             form.MinimumSize = new Size(560, 520);
             form.Load += delegate
             {
@@ -88,7 +88,7 @@ namespace Bubblecast
             header.Controls.Add(new Hairline { Dock = DockStyle.Bottom });
 
             // ── Pairing card: everything the Mac needs, above the fold ──
-            CardPanel pairingCard = UiLayout.NewCard("Pairing", "Enter these values in Bubblecast on the Mac.", sectionFont, smallFont);
+            CardPanel pairingCard = UiLayout.NewCard("Pairing", "Bubblecast on the Mac can find this PC on your network. Paste the pairing token there.", sectionFont, smallFont);
 
             string addressText = GetLocalIPv4Addresses();
             int addressLines = Math.Max(1, addressText.Split('\n').Length);
@@ -171,9 +171,9 @@ namespace Bubblecast
                 }
                 catch (ExternalException) { QueueStatus("The clipboard is busy. Try copying the TLS fingerprint again."); }
             };
-            UiLayout.AddLabel(pairingCard, "TLS certificate fingerprint · optional", labelFont);
+            UiLayout.AddLabel(pairingCard, "TLS certificate fingerprint", labelFont);
             UiLayout.AddRow(pairingCard, UiLayout.InlineRow(new FieldHost(tlsFingerprint, 1), copyFingerprint));
-            UiLayout.AddHelp(pairingCard, "SHA-256. Paste it into the Mac app to pin TLS on port 8766. HTTP on port 8765 stays available for rollback.", smallFont);
+            UiLayout.AddHelp(pairingCard, "SHA-256. The Mac learns this when you first save with TLS on (port 8766); check that both show the same value.", smallFont);
 
             UiLayout.AddSeparator(pairingCard);
             RelayButton openMac = new RelayButton("Open Mac desktop", ButtonKind.Secondary) { AccessibleName = "Open Mac Remote Desktop" };
@@ -181,7 +181,7 @@ namespace Bubblecast
             UiLayout.AddRow(pairingCard, UiLayout.ActionRow("Mac Remote Desktop", "Connects to the last Mac relay IP on port 3390, or to the override in Advanced.", openMac, labelFont, smallFont));
 
             // ── Notifications card: routine choices ──
-            CardPanel notifyCard = UiLayout.NewCard("Notifications", "Stored for this Windows account. Changes apply when you save.", sectionFont, smallFont);
+            CardPanel notifyCard = UiLayout.NewCard("Notifications", "Stored for this Windows account; changes apply when you save. Previews may appear in Windows notification history.", sectionFont, smallFont);
 
             RelaySwitch quietHours = new RelaySwitch { Checked = _quietHoursEnabled };
             UiLayout.AddRow(notifyCard, UiLayout.ActionRow("Quiet hours", "Suppress notifications during these hours. Messages are not queued.", quietHours, labelFont, smallFont));
@@ -251,14 +251,9 @@ namespace Bubblecast
             UiLayout.AddSeparator(notifyCard);
             RelaySwitch macQuietAlert = new RelaySwitch { Checked = _macQuietAlertEnabled };
             UiLayout.AddRow(notifyCard, UiLayout.ActionRow("Alert me when the Mac goes quiet", "One notice if the Mac stops checking in for 5 minutes, and one when it's back.", macQuietAlert, labelFont, smallFont));
-            UiLayout.AddSeparator(notifyCard);
-            RelaySwitch clickOpensMac = new RelaySwitch { Checked = _clickOpensMacDesktop };
-            UiLayout.AddRow(notifyCard, UiLayout.ActionRow("Clicking a notification opens the Mac", "Opens Remote Desktop to the Mac instead of Settings.", clickOpensMac, labelFont, smallFont));
-            UiLayout.AddSeparator(notifyCard);
-            UiLayout.AddRow(notifyCard, UiLayout.MakeText("Message previews sent by the Mac may appear in Windows notification history.", UiRole.Muted, smallFont, new Padding(0, 0, 0, 16)));
 
             // ── Advanced: infrequent maintenance and diagnostics, collapsed by default ──
-            CardPanel advancedCard = new CardPanel { Padding = new Padding(8) };
+            CardPanel advancedCard = new CardPanel { Padding = new Padding(8), Margin = Padding.Empty };
             DisclosureButton advancedToggle = new DisclosureButton("Advanced", "Discovery, Remote Desktop override, listen address, allowlist, token rotation, and diagnostics", labelFont, smallFont);
             TableLayoutPanel advancedBody = UiLayout.NewStack();
             advancedBody.Padding = new Padding(12, 0, 12, 4);
@@ -287,6 +282,10 @@ namespace Bubblecast
             UiLayout.AddLabel(advancedBody, "Listen address", labelFont);
             UiLayout.AddRow(advancedBody, new FieldHost(listenAddress, 1));
             UiLayout.AddHelp(advancedBody, "Leave blank to listen on every network adapter. Enter one of this PC's IPv4 addresses to accept connections only there, for example to ignore VPN and virtual adapters.", smallFont);
+
+            UiLayout.AddSeparator(advancedBody);
+            RelaySwitch clickOpensMac = new RelaySwitch { Checked = _clickOpensMacDesktop };
+            UiLayout.AddRow(advancedBody, UiLayout.ActionRow("Clicking a notification opens the Mac", "Opens Remote Desktop to the Mac instead of Settings.", clickOpensMac, labelFont, smallFont));
 
             UiLayout.AddSeparator(advancedBody);
             RelaySwitch allowPairedMacOnly = new RelaySwitch { Checked = _onlyAcceptPairedMacAddress, AccessibleName = "Restrict requests to the paired Mac IP address" };
@@ -417,7 +416,7 @@ namespace Bubblecast
             NativeTheme.FollowAppTheme(scroll);
             TableLayoutPanel page = UiLayout.NewStack();
             page.Dock = DockStyle.Top;
-            page.Padding = new Padding(24, 20, 24, 8);
+            page.Padding = new Padding(24, 16, 24, 4);
             scroll.Controls.Add(page);
             bool? wideLayout = null;
             Action updatePageLayout = delegate
