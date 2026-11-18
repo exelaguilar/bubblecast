@@ -2,11 +2,8 @@ import CryptoKit
 import Foundation
 import Security
 
-enum RelayProtocolV1 {
-    static func canonical(path: String, timestamp: String, nonce: String, senderBase64: String, previewBase64: String) -> String {
-        [path, timestamp, nonce, senderBase64, previewBase64].joined(separator: "\n")
-    }
-
+/// HMAC-SHA256 keyed by the UTF-8 bytes of the 64-character pairing token, as lowercase hex.
+enum RelayHMAC {
     static func signature(token: String, canonical: String) -> String {
         let key = SymmetricKey(data: Data(token.utf8))
         return HMAC<SHA256>.authenticationCode(for: Data(canonical.utf8), using: key)
@@ -26,7 +23,7 @@ enum RelayProtocolV2 {
     }
 
     static func messageID(token: String, guid: String) -> String {
-        String(RelayProtocolV1.signature(token: token, canonical: "msgid\n" + guid).prefix(32))
+        String(RelayHMAC.signature(token: token, canonical: "msgid\n" + guid).prefix(32))
     }
 }
 
@@ -42,7 +39,7 @@ final class RelayPinnedSessionDelegate: NSObject, URLSessionDelegate {
         return normalized.count == 64 && normalized.allSatisfy { $0.isHexDigit }
     }
 
-    private static func normalizeFingerprint(_ value: String) -> String {
+    static func normalizeFingerprint(_ value: String) -> String {
         String(value.filter { $0.isHexDigit }.uppercased())
     }
 
