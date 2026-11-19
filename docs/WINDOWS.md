@@ -23,7 +23,7 @@ Open **Bubblecast** from the Start menu, the desktop, or by double-clicking the 
 
 - **This PC's address**: IPv4 addresses by adapter. Adapters with a default gateway are listed first as likely LAN addresses.
 - **Pairing token**: shown masked; **Show** reveals it and **Copy** copies it. Copies are excluded from Clipboard History and cleared after one minute.
-- **TLS certificate fingerprint**: paste it into the Mac app to enable pinned TLS.
+- **TLS certificate fingerprint**: the Mac learns it the first time it connects over TLS; check that both apps show the same value.
 - **Open Mac desktop**: starts Remote Desktop to the last Mac address on port `3390`, or to the override in Advanced.
 
 **Notifications** (apply when you click **Save settings**)
@@ -31,12 +31,16 @@ Open **Bubblecast** from the Start menu, the desktop, or by double-clicking the 
 - **Quiet hours**: suppress notifications between two 24-hour `HH:mm` times on this PC's clock. Notifications aren't queued. Set *From* later than *until* for overnight hours.
 - **Muted contacts**: one sender name per line, matched exactly.
 - **Start when I sign in to Windows**: applies immediately.
+- **Alert me when the Mac goes quiet**: one notice if the Mac stops checking in for 5 minutes (it checks in every minute), and one when it's back. On by default.
 
 Test notifications from the Mac always appear, even during quiet hours or for muted senders.
 
 **Advanced** (collapsed by default)
 
+- **Let the Mac find this PC**: announces this PC as `<PC name>._bubblecast._tcp` on the local network so the Mac can list it. On by default.
 - **Mac Remote Desktop address**: optional override such as `mac-vm.local:3390`.
+- **Clicking a notification opens the Mac**: opens Remote Desktop to the Mac instead of Settings.
+- **Listen address**: blank listens on every adapter; one of this PC's IPv4 addresses accepts connections only there (for example, to ignore VPN and virtual adapters). Listeners restart when you save.
 - **Only accept requests from the paired Mac IP**: accepts requests only from the last address that sent a valid signed request. If the Mac's address changes, turn this off, let the Mac connect, then turn it back on.
 - **Rotate pairing token**: replaces the token immediately; notifications stop until the Mac has the new token.
 - **Diagnostics**: notification and health-check counts, rejections by reason (bad signature, clock skew, replay, malformed, oversize, address not allowed), and the last authenticated clock skew. **Copy privacy-safe diagnostics** excludes the token, addresses, sender names, and message text.
@@ -45,7 +49,7 @@ The footer shows the live receiver status and the header shows the pairing state
 
 ## Network and security
 
-- Every request must carry a valid HMAC-SHA256 signature, a timestamp within ±120 seconds, and a fresh nonce. Requests from before the app started are rejected as replays.
+- Requests must use protocol v2 and carry a valid HMAC-SHA256 signature, a timestamp within ±120 seconds, and a fresh nonce. Requests from before the app started are rejected as replays.
 - HTTP on `8765` authenticates requests but doesn't encrypt them; turn on pinned TLS on the Mac to encrypt notification contents. The TLS certificate is self-signed and stored in your Windows user's certificate store.
 - Request lines, headers, and sender/preview sizes are bounded, slow requests time out, and at most four connections are handled at once.
 - If the Windows firewall blocks the Mac, add a narrow inbound rule yourself for your private network and the port you use. Never port-forward `8765` or `8766` to the internet.
@@ -55,12 +59,12 @@ The footer shows the live receiver status and the header shows the pairing state
 | Data | Location |
 | --- | --- |
 | App | `C:\Program Files\Bubblecast` |
-| Pairing token | `%LOCALAPPDATA%\Bubblecast\token.txt` |
+| Pairing token | `%LOCALAPPDATA%\Bubblecast\token.txt`, encrypted with Windows DPAPI for your user account |
 | Settings | `HKCU\Software\Bubblecast` |
 | TLS certificate | Current user's personal certificate store, `CN=Bubblecast Local TLS` |
 | Sign-in shortcut | `Startup\Bubblecast.lnk` |
 
-If `token.txt` is damaged, Bubblecast stops with a repair message. Delete the file to generate a new token, then update the Mac.
+If `token.txt` is damaged or can't be decrypted (for example after an administrator resets your Windows password), Bubblecast stops with a repair message. Delete the file to generate a new token, then update the Mac.
 
 ## Uninstall
 
@@ -77,3 +81,7 @@ cmd /c windows\build.cmd test
 This builds `windows\build\Bubblecast.exe` and `windows\build\Bubblecast Setup.exe`, then runs the pure-logic checks (token validation, request parsing, text sanitizing, protocol vectors, startup shortcut policy, quiet hours, and status display). `cmd /c windows\build.cmd release` also copies both executables to `windows\release\` and writes `SHA256SUMS` and `RELEASE-NOTES.md` with the source commit and compiler version.
 
 The build embeds `Bubblecast.ico` and `BrandMark.png`, which are generated by `tools/BrandIcon.cs`. See the [protocol notes and test vectors](PROTOCOL.md) for the request format.
+
+## Tray menu
+
+Right-click the tray icon for **Settings**, **Open Mac Remote Desktop**, **Recent notifications** (the last few alerts, kept in memory only and cleared when Bubblecast exits), and **Exit**.

@@ -9,7 +9,7 @@ A tiny, private relay that turns new messages on your Mac into native Windows no
 over your own network, with nothing in the cloud.
 
 [![Latest release](https://img.shields.io/github/v/release/exelaguilar/bubblecast?label=release&color=0EB5A6)](https://github.com/exelaguilar/bubblecast/releases/latest)
-![macOS 15](https://img.shields.io/badge/macOS-15%20Sequoia%20%C2%B7%20universal-2B8CF5?logo=apple&logoColor=white)
+![macOS 13+](https://img.shields.io/badge/macOS-13%2B%20%C2%B7%20universal-2B8CF5?logo=apple&logoColor=white)
 ![Windows 10/11](https://img.shields.io/badge/Windows-10%20%7C%2011-2B8CF5?logo=windows&logoColor=white)
 ![Dependencies](https://img.shields.io/badge/dependencies-zero-0EB5A6)
 ![LAN only](https://img.shields.io/badge/network-LAN%20only-0EB5A6)
@@ -36,12 +36,14 @@ No Apple ID sharing. No cloud relay. No account. Just two small native apps talk
 
 |  |  |
 | --- | --- |
-| ⚡ **Fast** | Messages are picked up within about three seconds; bursts are batched into one tidy toast. |
-| 🔒 **Private by design** | LAN only, no cloud. Every request is HMAC-SHA256 signed with replay protection; optional TLS with certificate pinning. |
+| ⚡ **Instant** | The Mac reacts the moment Messages writes a new message; bursts are batched into one tidy notification. |
+| 🔒 **Private by design** | LAN only, no cloud. Every request is HMAC-SHA256 signed with replay protection, and TLS pinned to your PC's certificate is on by default. |
 | 👀 **Read-only** | The Mac app only *reads* the Messages database. It never sends, replies, or modifies anything. |
 | 🧠 **Smart filtering** | Skips old and iCloud-synced backlog, de-duplicates, names group chats, and sends one catch-up summary after the PC was offline. |
 | 🙋 **Real names** | Shows the sender from your Contacts, or from your own `address = name` overrides. Previews are opt-in. |
+| 🔎 **Zero-typing pairing** | Windows announces itself on your network; the Mac lists it, you click **Use**, paste the token, and compare one fingerprint. |
 | 🌙 **Quiet hours & mutes** | Silence notifications overnight or mute specific senders on Windows. |
+| 🚨 **Knows when the Mac goes quiet** | One notice on Windows if the Mac stops checking in for five minutes, and another when it's back. |
 | 🖥️ **Truly native** | SwiftUI on macOS, WinForms on Windows, light and dark themes on both — and zero third-party dependencies. |
 | 🧰 **Home-lab friendly** | Built for a headless macOS VM: open-at-login, health checks, one-click Remote Desktop to the Mac, and privacy-safe diagnostics. |
 
@@ -50,11 +52,11 @@ No Apple ID sharing. No cloud relay. No account. Just two small native apps talk
 ```mermaid
 flowchart LR
     A["💬 Messages<br/><sub>chat.db, read-only</sub>"] --> B["Bubblecast for Mac<br/><sub>menu-bar app</sub>"]
-    B -- "signed request<br/>HTTP 8765 or pinned TLS 8766" --> C["Bubblecast for Windows<br/><sub>tray app</sub>"]
+    B -- "signed request<br/>pinned TLS 8766 (or HTTP 8765)" --> C["Bubblecast for Windows<br/><sub>tray app</sub>"]
     C --> D["🔔 Windows notification"]
 ```
 
-1. The Mac app polls the Messages database (read-only) for new incoming rows.
+1. The Mac app watches the Messages database (read-only) and reads new incoming rows as soon as they're written.
 2. It builds a small, signed request — sender, optional group name, optional preview — and sends it to your PC.
 3. The Windows app verifies the signature, timestamp, and nonce, applies quiet hours and mutes, and shows the notification.
 
@@ -70,7 +72,7 @@ Attachments, message history, and your Apple ID never leave the Mac.
 
 > Bubblecast isn't signed with an Apple Developer ID, so the first launch is blocked. Open **System Settings → Privacy & Security**, scroll to the message about Bubblecast, and click **Open Anyway**. You only need to do this once per version.
 
-**3. Pair** — Paste the Windows address and pairing token into the Mac app, click **Save**, then **Send test**. A notification on your PC means you're done. 🎉
+**3. Pair** — In the Mac app, click **Use** next to your PC under *Found on your network* (or type its address), paste the pairing token from Windows, and click **Save**. The Mac learns your PC's TLS certificate; check that its fingerprint matches the one Bubblecast shows on Windows, click **Save** again, then **Send test**. A notification on your PC means you're done. 🎉
 
 Full walkthroughs: [Mac guide](docs/MAC.md) · [Windows guide](docs/WINDOWS.md)
 
@@ -100,11 +102,11 @@ Pairing details and connection status live front and center; routine notificatio
 ## 🔐 Private by design
 
 - **Authenticated:** every request carries an HMAC-SHA256 signature over a canonical payload, a timestamp (±120 s), and a one-time nonce. Wrong tokens, replays, and clock skew are rejected and counted.
-- **Encrypted (optional):** turn on pinned TLS and the Mac only talks to the exact certificate your PC generated.
+- **Encrypted by default:** the Mac pins your PC's own certificate the first time you pair (after you compare fingerprints) and only talks to that exact certificate afterward. Plain HTTP stays available if you turn TLS off.
 - **Minimal data:** sender, group name, and a preview capped at 180 characters — and previews are opt-in. No attachments, ever.
-- **Secrets stay put:** the pairing token lives in the Mac Keychain and in your Windows profile. Copying it on Windows skips Clipboard History and clears itself after a minute.
+- **Secrets stay put:** the pairing token lives in the Mac Keychain and, on Windows, in your profile encrypted with Windows DPAPI. Copying it on Windows skips Clipboard History and clears itself after a minute.
 - **Stays on your LAN:** nothing is sent to the internet. Setup never adds firewall rules — don't port-forward the relay ports.
-- **Hardened receiver:** bounded request sizes and timeouts, a connection cap, and an optional "only accept the paired Mac's IP" allowlist.
+- **Hardened receiver:** bounded request sizes and timeouts, a connection cap, an optional "only accept the paired Mac's IP" allowlist, and an optional single listen address.
 
 Wire format and test vectors: [docs/PROTOCOL.md](docs/PROTOCOL.md).
 
@@ -112,7 +114,7 @@ Wire format and test vectors: [docs/PROTOCOL.md](docs/PROTOCOL.md).
 
 | | |
 | --- | --- |
-| **Mac** | macOS 15 Sequoia on Intel or Apple Silicon (a Mac or a macOS VM), signed in to Messages. |
+| **Mac** | macOS 13 Ventura or later on Intel or Apple Silicon (a Mac or a macOS VM), signed in to Messages. |
 | **Windows** | Windows 10 or 11 with .NET Framework 4.x (built in). |
 | **Network** | Both machines on the same trusted LAN. |
 

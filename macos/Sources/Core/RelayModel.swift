@@ -1,14 +1,19 @@
 import AppKit
 import Combine
 import Contacts
-import CryptoKit
 import Foundation
-import SQLite3
 import ServiceManagement
 import SwiftUI
 
+/// Settings-window state and the relay's orchestration. Database reads, delivery state, contact lookups,
+/// and requests live in `MessagesDatabase`, `DeliveryQueue`, `ContactResolver`, and `RelayClient`; this
+/// class wires them together on one serial queue and publishes UI state on the main thread.
 final class RelayModel: ObservableObject {
     static let shared = RelayModel()
+
+    /// Fallback poll when no file-change event arrives (events normally wake the relay immediately).
+    private static let fallbackPollInterval: DispatchTimeInterval = .seconds(5)
+    private static let healthCheckInterval: DispatchTimeInterval = .seconds(60)
 
     @Published var windowsAddress: String { didSet { updateUnsavedChanges() } }
     @Published var pairingToken: String { didSet { updateUnsavedChanges() } }
@@ -35,29 +40,34 @@ final class RelayModel: ObservableObject {
     @Published private(set) var lastSuccessfulNotification: Date?
     @Published private(set) var contactLookupSummary = "Not checked yet"
     @Published private(set) var timestampUnitSummary = "not observed"
+    /// Names of Bubblecast receivers announcing on the local network.
+    @Published private(set) var discoveredPCs: [String] = []
 
-    private let databasePath = (NSHomeDirectory() as NSString).appendingPathComponent("Library/Messages/chat.db")
+    private let databasePath: String
     private let queue = DispatchQueue(label: "local.bubblecast.database", qos: .utility)
-    private let contacts = CNContactStore()
-    private var settings: RelaySettings
+    private let contactStore: CNContactStore
+    private let client = RelayClient()
+    private let discovery = WindowsDiscovery()
+    private let defaults = UserDefaults.standard
+
+    // Main-thread state.
     private var savedSettingsForUI: RelaySettings?
     private var contactObserver: NSObjectProtocol?
-    private var contactNameCache: [String: String] = [:]
-    private var contactNameCacheMisses = Set<String>()
-    private var timestampUnitCounts: [TimestampUnit: Int] = [:]
-    private var timer: DispatchSourceTimer?
+
+    // Queue-owned state. Only touched on `queue`.
+    private var settings: RelaySettings
+    private let database: MessagesDatabase
+    private let delivery: DeliveryQueue
+    private let contacts: ContactResolver
+    private var monitor: MessagesChangeMonitor?
+    private var pollTimer: DispatchSourceTimer?
     private var healthTimer: DispatchSourceTimer?
-    private var lastIncomingRowID: Int64?
-    private var pendingMessages: [IncomingMessage] = []
-    private var pendingRowIDs = Set<Int64>()
-    private var processedGUIDs: Set<String>
-    private var processedGUIDOrder: [String]
-    private var suppressedOldMessageTotal = 0
-    private var duplicateMessageTotal = 0
-    private var relayInProgress = false
-    private var retryAttempt = 0
-    private var nextRetryAt: Date?
-    private var deliveryPaused = false
+    private var retryWork: DispatchWorkItem?
+    private var timestampUnitCounts: [TimestampUnit: Int] = [:]
+    private var suppressedOldTotal: Int
+    private var duplicateTotal: Int
+    private var catchUpTotal: Int
+    private var rebaselineTotal: Int
 
     private init() {
         let loadedSettings = RelaySettings.load()
@@ -73,46 +83,92 @@ final class RelayModel: ObservableObject {
         notifyForReactions = loadedSettings.notifyForReactions
         useTLS = loadedSettings.useTLS
         tlsCertificateFingerprint = loadedSettings.tlsCertificateFingerprint
-        let savedSuppressedOldCount = UserDefaults.standard.integer(forKey: RelayPreferences.suppressedOldMessageCount)
-        let savedDuplicateCount = UserDefaults.standard.integer(forKey: RelayPreferences.duplicateMessageCount)
-        catchUpSummaryCount = UserDefaults.standard.integer(forKey: RelayPreferences.catchUpSummaryCount)
-        cursorRebaselineCount = UserDefaults.standard.integer(forKey: RelayPreferences.cursorRebaselineCount)
-        suppressedOldMessageCount = savedSuppressedOldCount
-        duplicateMessageCount = savedDuplicateCount
-        suppressedOldMessageTotal = savedSuppressedOldCount
-        duplicateMessageTotal = savedDuplicateCount
-        lastSuccessfulNotification = UserDefaults.standard.object(forKey: RelayPreferences.lastSuccessfulNotification) as? Date
-        processedGUIDOrder = UserDefaults.standard.stringArray(forKey: RelayPreferences.recentlyProcessedMessageGUIDs) ?? []
-        processedGUIDs = Set(processedGUIDOrder)
+
+        let standard = UserDefaults.standard
+        let suppressed = standard.integer(forKey: RelayPreferences.suppressedOldMessageCount)
+        let duplicates = standard.integer(forKey: RelayPreferences.duplicateMessageCount)
+        let catchUp = standard.integer(forKey: RelayPreferences.catchUpSummaryCount)
+        let rebaselines = standard.integer(forKey: RelayPreferences.cursorRebaselineCount)
+        suppressedOldTotal = suppressed
+        duplicateTotal = duplicates
+        catchUpTotal = catchUp
+        rebaselineTotal = rebaselines
+        suppressedOldMessageCount = suppressed
+        duplicateMessageCount = duplicates
+        catchUpSummaryCount = catchUp
+        cursorRebaselineCount = rebaselines
+        lastSuccessfulNotification = standard.object(forKey: RelayPreferences.lastSuccessfulNotification) as? Date
+
+        let path = (NSHomeDirectory() as NSString).appendingPathComponent("Library/Messages/chat.db")
+        let store = CNContactStore()
+        databasePath = path
+        contactStore = store
+        database = MessagesDatabase(path: path)
+        delivery = DeliveryQueue(store: UserDefaultsDeliveryStore(),
+                                 suppressOldMessages: loadedSettings.suppressOldMessages,
+                                 maximumAge: TimeInterval(loadedSettings.maximumMessageAgeMinutes * 60))
+        contacts = ContactResolver(store: store)
+
+        delivery.onSuppressedOld = { [weak self] in
+            guard let self else { return }
+            self.suppressedOldTotal += 1
+            self.defaults.set(self.suppressedOldTotal, forKey: RelayPreferences.suppressedOldMessageCount)
+            let total = self.suppressedOldTotal
+            DispatchQueue.main.async { self.suppressedOldMessageCount = total }
+            self.setStatus("Ignored an old, undated, or unexpected future message.")
+        }
+        delivery.onDuplicate = { [weak self] in
+            guard let self else { return }
+            self.duplicateTotal += 1
+            self.defaults.set(self.duplicateTotal, forKey: RelayPreferences.duplicateMessageCount)
+            let total = self.duplicateTotal
+            DispatchQueue.main.async { self.duplicateMessageCount = total }
+        }
+        contacts.onSummary = { [weak self] summary in
+            DispatchQueue.main.async { self?.contactLookupSummary = summary }
+        }
     }
 
-    func start() {
-        guard timer == nil else { return }
-        refreshLoginItemStatus()
-        let source = DispatchSource.makeTimerSource(queue: queue)
-        source.schedule(deadline: .now(), repeating: .seconds(3), leeway: .milliseconds(400))
-        source.setEventHandler { [weak self] in self?.pollMessages() }
-        timer = source
-        source.resume()
+    // MARK: - Lifecycle
 
-        let healthSource = DispatchSource.makeTimerSource(queue: queue)
-        healthSource.schedule(deadline: .now() + .seconds(2), repeating: .seconds(60), leeway: .seconds(3))
-        healthSource.setEventHandler { [weak self] in self?.checkWindowsHealth() }
-        healthTimer = healthSource
-        healthSource.resume()
+    func start() {
+        guard pollTimer == nil else { return }
+        refreshLoginItemStatus()
+
+        let poll = DispatchSource.makeTimerSource(queue: queue)
+        poll.schedule(deadline: .now(), repeating: Self.fallbackPollInterval, leeway: .milliseconds(500))
+        poll.setEventHandler { [weak self] in self?.pollMessages() }
+        pollTimer = poll
+        poll.resume()
+
+        let health = DispatchSource.makeTimerSource(queue: queue)
+        health.schedule(deadline: .now() + .seconds(2), repeating: Self.healthCheckInterval, leeway: .seconds(3))
+        health.setEventHandler { [weak self] in self?.checkWindowsHealth() }
+        healthTimer = health
+        health.resume()
+
+        queue.async {
+            let monitor = MessagesChangeMonitor(databasePath: self.databasePath, queue: self.queue) { [weak self] in
+                self?.pollMessages()
+            }
+            self.monitor = monitor
+            monitor.start()
+        }
+
+        discovery.onChange = { [weak self] names in self?.discoveredPCs = names }
+        discovery.start()
+
         requestContactsAccessIfNeeded(enabled: savedSettingsForUI?.includeSenderNames ?? false)
         contactObserver = NotificationCenter.default.addObserver(forName: .CNContactStoreDidChange, object: nil, queue: nil) { [weak self] _ in
             guard let self else { return }
             self.queue.async {
-                self.contactNameCache.removeAll()
-                self.contactNameCacheMisses.removeAll()
-                for index in self.pendingMessages.indices {
-                    self.pendingMessages[index].resolvedSenderName = nil
-                    self.pendingMessages[index].senderNameWasResolved = false
-                }
+                self.contacts.reset()
+                self.delivery.clearResolvedNames()
             }
         }
     }
+
+    // MARK: - Settings actions
 
     @discardableResult
     func saveSettings() -> Bool {
@@ -125,18 +181,7 @@ final class RelayModel: ObservableObject {
             return false
         }
         addressError = windowsAddress.isEmpty ? "Enter the Windows PC address to check its status or send alerts." : nil
-        let snapshot = RelaySettings(
-            windowsAddress: windowsAddress,
-            pairingToken: pairingToken,
-            includeSenderNames: includeSenderNames,
-            includeMessagePreviews: includeMessagePreviews,
-            suppressOldMessages: suppressOldMessages,
-            maximumMessageAgeMinutes: maximumMessageAgeMinutes,
-            senderNameOverrides: senderNameOverrides,
-            notifyForReactions: notifyForReactions,
-            useTLS: useTLS,
-            tlsCertificateFingerprint: tlsCertificateFingerprint.trimmingCharacters(in: .whitespacesAndNewlines)
-        )
+        let snapshot = makeSettingsFromDraft()
         do {
             try snapshot.save()
         } catch {
@@ -148,26 +193,56 @@ final class RelayModel: ObservableObject {
         if snapshot.includeSenderNames { requestContactsAccessIfNeeded(enabled: true) }
         queue.async {
             self.settings = snapshot
-            for index in self.pendingMessages.indices {
-                self.pendingMessages[index].resolvedSenderName = nil
-                self.pendingMessages[index].senderNameWasResolved = false
-            }
-            self.contactNameCache.removeAll()
-            self.contactNameCacheMisses.removeAll()
-            self.retryAttempt = 0
-            self.nextRetryAt = nil
-            self.deliveryPaused = false
+            self.delivery.settingsChanged(suppressOldMessages: snapshot.suppressOldMessages,
+                                          maximumAge: TimeInterval(snapshot.maximumMessageAgeMinutes * 60))
+            self.contacts.reset()
+            self.client.reset()
+            self.cancelRetry()
             self.pumpDelivery()
             self.checkWindowsHealth()
         }
         setStatus("Settings saved. Monitoring Messages.", level: .ok)
+        if snapshot.useTLS && !RelayPinnedSessionDelegate.isValidFingerprint(snapshot.tlsCertificateFingerprint)
+            && !snapshot.windowsAddress.isEmpty && !snapshot.pairingToken.isEmpty {
+            learnWindowsCertificate(RelayEndpointConfiguration(settings: snapshot))
+        }
         return true
+    }
+
+    /// Fills in a PC found on the network. The pairing token still comes from Windows.
+    func useDiscoveredPC(_ name: String) {
+        windowsAddress = WindowsDiscovery.address(forName: name)
+        useTLS = true
+        if !RelayPinnedSessionDelegate.isValidFingerprint(tlsCertificateFingerprint) { tlsCertificateFingerprint = "" }
+        setStatus("Selected \(name). Paste the pairing token from Bubblecast on Windows, then click Save.", level: .info)
+    }
+
+    /// Trust on first use: learns the certificate Windows presents and fills it in for the user to compare
+    /// with the fingerprint Windows shows. It is pinned only when the user saves it.
+    private func learnWindowsCertificate(_ configuration: RelayEndpointConfiguration) {
+        setStatus("Contacting Windows over TLS to learn its certificate…")
+        client.learnFingerprint(configuration: configuration) { [weak self] fingerprint, outcome, reason in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                guard let fingerprint, RelayPinnedSessionDelegate.isValidFingerprint(fingerprint) else {
+                    self.setStatus("Couldn't reach Windows over TLS: \(reason)", level: .error)
+                    return
+                }
+                self.tlsCertificateFingerprint = fingerprint
+                let suffix = String(fingerprint.suffix(6))
+                if outcome == .rejected {
+                    self.setStatus("Learned the Windows certificate (ends in \(suffix)), but Windows rejected the pairing token. Fix the token, check the fingerprint, then Save.", level: .warning)
+                } else {
+                    self.setStatus("Learned the Windows certificate (ends in \(suffix)). Check that it matches the fingerprint shown on Windows, then click Save to trust it.", level: .warning)
+                }
+            }
+        }
     }
 
     func sendTest() {
         guard saveSettings() else { return }
         queue.async {
-            self.sendPing(kind: .test) { [weak self] outcome, message in
+            self.client.send(path: "/notify", method: "POST", kind: .test, configuration: RelayEndpointConfiguration(settings: self.settings)) { [weak self] outcome, message in
                 self?.setStatus(outcome == .delivered
                     ? "Test notification shown by Windows."
                     : "Test failed: \(message)", level: outcome == .delivered ? .ok : .error)
@@ -195,12 +270,14 @@ final class RelayModel: ObservableObject {
 
     func resetCounters() {
         queue.async {
-            self.suppressedOldMessageTotal = 0
-            self.duplicateMessageTotal = 0
-            UserDefaults.standard.set(0, forKey: RelayPreferences.suppressedOldMessageCount)
-            UserDefaults.standard.set(0, forKey: RelayPreferences.duplicateMessageCount)
-            UserDefaults.standard.set(0, forKey: RelayPreferences.catchUpSummaryCount)
-            UserDefaults.standard.set(0, forKey: RelayPreferences.cursorRebaselineCount)
+            self.suppressedOldTotal = 0
+            self.duplicateTotal = 0
+            self.catchUpTotal = 0
+            self.rebaselineTotal = 0
+            for key in [RelayPreferences.suppressedOldMessageCount, RelayPreferences.duplicateMessageCount,
+                        RelayPreferences.catchUpSummaryCount, RelayPreferences.cursorRebaselineCount] {
+                self.defaults.set(0, forKey: key)
+            }
             DispatchQueue.main.async {
                 self.suppressedOldMessageCount = 0
                 self.duplicateMessageCount = 0
@@ -210,9 +287,32 @@ final class RelayModel: ObservableObject {
         }
     }
 
+    func copyDiagnostics() {
+        let dateText = lastSuccessfulNotification.map { ISO8601DateFormatter().string(from: $0) } ?? "never"
+        let summary = [
+            "Bubblecast macOS \(RelayBuildInfo.version)",
+            "Windows health: \(windowsHealthLevel == .ok ? "reachable" : "not currently confirmed")",
+            "Recent-message filtering: \(suppressOldMessages ? "enabled (\(maximumMessageAgeMinutes) minutes)" : "disabled")",
+            "Old or undated rows suppressed: \(suppressedOldMessageCount)",
+            "Duplicate rows suppressed: \(duplicateMessageCount)",
+            "Messages delivered in catch-up summaries: \(catchUpSummaryCount)",
+            "Cursor re-baselines: \(cursorRebaselineCount)",
+            "Message timestamp units: \(timestampUnitSummary)",
+            "Last successful notification: \(dateText)",
+            "Sender-name setting: \(includeSenderNames ? "on" : "off")",
+            "Message-preview setting: \(includeMessagePreviews ? "on" : "off")",
+            "Pinned TLS: \(useTLS ? "on" : "off")",
+            "Contact lookup: \(contactLookupSummary)"
+        ].joined(separator: "\n")
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(summary, forType: .string)
+        setStatus("Privacy-safe diagnostics copied. They exclude addresses, tokens, sender names, and message text.", level: .ok)
+    }
+
+    // MARK: - Draft tracking (main thread)
+
     private func refreshLoginItemStatus() {
-        let serviceStatus = SMAppService.mainApp.status
-        switch serviceStatus {
+        switch SMAppService.mainApp.status {
         case .enabled:
             openAtLogin = true
             loginItemStatus = "Enabled"
@@ -251,345 +351,116 @@ final class RelayModel: ObservableObject {
         )
     }
 
-    func copyDiagnostics() {
-        let dateText = lastSuccessfulNotification.map {
-            ISO8601DateFormatter().string(from: $0)
-        } ?? "never"
-        let summary = [
-            "Bubblecast macOS \(RelayBuildInfo.version)",
-            "Windows health: \(windowsHealth == "Windows receiver is reachable" ? "reachable" : "not currently confirmed")",
-            "Recent-message filtering: \(suppressOldMessages ? "enabled (\(maximumMessageAgeMinutes) minutes)" : "disabled")",
-            "Old or undated rows suppressed: \(suppressedOldMessageCount)",
-            "Duplicate rows suppressed: \(duplicateMessageCount)",
-            "Messages delivered in catch-up summaries: \(catchUpSummaryCount)",
-            "Cursor re-baselines: \(cursorRebaselineCount)",
-            "Message timestamp units: \(timestampUnitSummary)",
-            "Last successful notification: \(dateText)",
-            "Sender-name setting: \(includeSenderNames ? "on" : "off")",
-            "Message-preview setting: \(includeMessagePreviews ? "on" : "off")",
-            "Contact lookup: \(contactLookupSummary)"
-        ].joined(separator: "\n")
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(summary, forType: .string)
-        setStatus("Privacy-safe diagnostics copied. They exclude addresses, tokens, sender names, and message text.", level: .ok)
-    }
+    // MARK: - Polling and delivery (queue)
 
     private func pollMessages() {
-        var database: OpaquePointer?
-        let openResult = sqlite3_open_v2(databasePath, &database, SQLITE_OPEN_READONLY, nil)
-        guard openResult == SQLITE_OK, let db = database else {
-            let code = database.map { sqlite3_errcode($0) } ?? openResult
-            if let db = database { sqlite3_close(db) }
-            setStatus(sqliteErrorDescription(code), level: .error)
-            return
-        }
-        defer { sqlite3_close(db) }
-        sqlite3_busy_timeout(db, 500)
-
-        guard let maximumRowID = maximumMessageRowID(in: db) else {
-            setStatus(sqliteErrorDescription(sqlite3_errcode(db)), level: .error)
-            return
-        }
-
-        if lastIncomingRowID == nil {
-            if UserDefaults.standard.object(forKey: RelayPreferences.lastDeliveredIncomingMessageRowID) != nil {
-                // Resume from the last successfully delivered row after app/VM downtime.
-                lastIncomingRowID = Int64(UserDefaults.standard.integer(forKey: RelayPreferences.lastDeliveredIncomingMessageRowID))
-            } else {
-                // Establish a baseline on first launch so old conversations do not trigger alerts.
-                lastIncomingRowID = maximumRowID
-                UserDefaults.standard.set(maximumRowID, forKey: RelayPreferences.lastDeliveredIncomingMessageRowID)
+        do {
+            let maximumRowID = try database.maximumRowID()
+            switch delivery.align(toMaximumRowID: maximumRowID) {
+            case .baselined:
                 setStatus("Monitoring Messages. Existing conversations were ignored.", level: .ok)
                 return
+            case .rebaselined:
+                rebaselineTotal += 1
+                defaults.set(rebaselineTotal, forKey: RelayPreferences.cursorRebaselineCount)
+                let total = rebaselineTotal
+                DispatchQueue.main.async { self.cursorRebaselineCount = total }
+                setStatus("Messages database position changed. Monitoring from its current end.", level: .warning)
+            case .unchanged:
+                break
             }
-        }
-
-        if let cursor = lastIncomingRowID, cursor > maximumRowID {
-            lastIncomingRowID = maximumRowID
-            UserDefaults.standard.set(maximumRowID, forKey: RelayPreferences.lastDeliveredIncomingMessageRowID)
-            cursorRebaselineCount += 1
-            UserDefaults.standard.set(cursorRebaselineCount, forKey: RelayPreferences.cursorRebaselineCount)
-            let count = cursorRebaselineCount
-            DispatchQueue.main.async { self.cursorRebaselineCount = count }
-            setStatus("Messages database position changed. Monitoring from its current end.", level: .warning)
-        }
-
-        guard let incoming = incomingMessages(in: db, after: lastIncomingRowID!) else {
-            setStatus(sqliteErrorDescription(sqlite3_errcode(db)), level: .error)
-            return
-        }
-        for var message in incoming where pendingRowIDs.insert(message.rowID).inserted {
-            message.firstReadAt = Date()
-            message.freshWhenRead = isFreshWhenFirstRead(message)
-            if let unit = message.timestampUnit { timestampUnitCounts[unit, default: 0] += 1 }
-            pendingMessages.append(message)
-        }
-        updateTimestampUnitSummary()
-        pumpDelivery()
-    }
-
-    private struct IncomingMessage {
-        let rowID: Int64
-        let senderAddress: String
-        let preview: String
-        let messageDate: Date?
-        let guid: String
-        let groupName: String
-        let isAssociatedMessage: Bool
-        let timestampUnit: TimestampUnit?
-        var firstReadAt = Date()
-        var freshWhenRead = true
-        var resolvedSenderName: String?
-        var senderNameWasResolved = false
-    }
-
-    private func isFreshWhenFirstRead(_ message: IncomingMessage) -> Bool {
-        guard settings.suppressOldMessages else { return true }
-        guard let date = message.messageDate else { return false }
-        let age = Date().timeIntervalSince(date)
-        return age <= TimeInterval(settings.maximumMessageAgeMinutes * 60) && age >= -300
-    }
-
-    private func maximumMessageRowID(in db: OpaquePointer) -> Int64? {
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(db, "SELECT COALESCE(MAX(ROWID),0) FROM message", -1, &statement, nil) == SQLITE_OK,
-              let stmt = statement else { return nil }
-        defer { sqlite3_finalize(stmt) }
-        guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
-        return sqlite3_column_int64(stmt, 0)
-    }
-
-    private func incomingMessages(in db: OpaquePointer, after rowID: Int64) -> [IncomingMessage]? {
-        let hasItemType = tableColumnExists("message", column: "item_type", in: db)
-        let hasReactionType = tableColumnExists("message", column: "associated_message_type", in: db)
-        let hasChatJoin = tableExists("chat_message_join", in: db) && tableExists("chat", in: db) &&
-            tableColumnExists("chat_message_join", column: "message_id", in: db) && tableColumnExists("chat_message_join", column: "chat_id", in: db)
-        let hasChatDisplayName = hasChatJoin && tableColumnExists("chat", column: "display_name", in: db)
-        let hasChatRoomName = hasChatJoin && tableColumnExists("chat", column: "room_name", in: db)
-        let reactionExpression = hasReactionType ? "COALESCE(m.associated_message_type, 0)" : "0"
-        let displayNameExpression = hasChatDisplayName ? "COALESCE(c.display_name, '')" : "''"
-        let roomNameExpression = hasChatRoomName ? "COALESCE(c.room_name, '')" : "''"
-        let joins = hasChatJoin ? " LEFT JOIN chat_message_join AS cmj ON cmj.message_id = m.ROWID LEFT JOIN chat AS c ON c.ROWID = cmj.chat_id" : ""
-        let itemTypeFilter = hasItemType ? " AND COALESCE(m.item_type, 0) = 0" : ""
-        let reactionFilter = hasReactionType ? " AND (?2 = 1 OR COALESCE(m.associated_message_type, 0) = 0)" : ""
-        let sql = "SELECT m.ROWID, COALESCE(h.id, ''), COALESCE(m.text, ''), COALESCE(m.date, 0), COALESCE(m.guid, ''), \(reactionExpression), \(displayNameExpression), \(roomNameExpression) FROM message AS m LEFT JOIN handle AS h ON h.ROWID = m.handle_id\(joins) WHERE m.is_from_me = 0\(itemTypeFilter)\(reactionFilter) AND m.ROWID > ?1 ORDER BY m.ROWID ASC LIMIT 100"
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK, let stmt = statement else {
-            return nil
-        }
-        defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_int64(stmt, 1, rowID)
-        if hasReactionType { sqlite3_bind_int(stmt, 2, settings.notifyForReactions ? 1 : 0) }
-        var messages: [IncomingMessage] = []
-        var result = sqlite3_step(stmt)
-        while result == SQLITE_ROW {
-            let address = sqlite3_column_text(stmt, 1).map { String(cString: $0) } ?? ""
-            let rawPreview = sqlite3_column_text(stmt, 2).map { String(cString: $0) } ?? ""
-            let rawDate = sqlite3_column_double(stmt, 3)
-            let guid = sqlite3_column_text(stmt, 4).map { String(cString: $0) } ?? ""
-            let isAssociatedMessage = sqlite3_column_int(stmt, 5) != 0
-            let displayName = sqlite3_column_text(stmt, 6).map { String(cString: $0) } ?? ""
-            let roomName = sqlite3_column_text(stmt, 7).map { String(cString: $0) } ?? ""
-            let preview = rawPreview
-                .components(separatedBy: .newlines)
-                .joined(separator: " ")
-                .components(separatedBy: .whitespaces)
-                .filter { !$0.isEmpty }
-                .joined(separator: " ")
-            let decodedDate = TimestampDecoder.decode(rawDate)
-            messages.append(IncomingMessage(
-                rowID: sqlite3_column_int64(stmt, 0),
-                senderAddress: address,
-                preview: String((preview.isEmpty && isAssociatedMessage ? "Associated message event received" : preview).prefix(180)),
-                messageDate: decodedDate?.date,
-                guid: guid.trimmingCharacters(in: .whitespacesAndNewlines),
-                groupName: displayName.isEmpty ? roomName : displayName,
-                isAssociatedMessage: isAssociatedMessage,
-                timestampUnit: decodedDate?.unit
-            ))
-            result = sqlite3_step(stmt)
-        }
-        guard result == SQLITE_DONE else { return nil }
-        return messages
-    }
-
-    private func tableExists(_ name: String, in db: OpaquePointer) -> Bool {
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(db, "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1 LIMIT 1", -1, &statement, nil) == SQLITE_OK,
-              let stmt = statement else { return false }
-        defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_text(stmt, 1, name, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
-        return sqlite3_step(stmt) == SQLITE_ROW
-    }
-
-    private func tableColumnExists(_ table: String, column: String, in db: OpaquePointer) -> Bool {
-        guard ["message", "chat", "chat_message_join"].contains(table) else { return false }
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(db, "PRAGMA table_info(\(table))", -1, &statement, nil) == SQLITE_OK,
-              let stmt = statement else { return false }
-        defer { sqlite3_finalize(stmt) }
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            if let value = sqlite3_column_text(stmt, 1), String(cString: value).caseInsensitiveCompare(column) == .orderedSame {
-                return true
+            let rows = try database.incomingMessages(after: delivery.cursor ?? maximumRowID,
+                                                     includeAssociatedMessages: settings.notifyForReactions)
+            let added = delivery.ingest(rows)
+            if !added.isEmpty {
+                for row in added {
+                    if let unit = row.timestampUnit { timestampUnitCounts[unit, default: 0] += 1 }
+                }
+                updateTimestampUnitSummary()
             }
+            pumpDelivery()
+        } catch {
+            setStatus(MessagesDatabase.describe(error), level: .error)
         }
-        return false
     }
 
     private func pumpDelivery() {
-        guard !relayInProgress, !deliveryPaused else { return }
-        if let retryAt = nextRetryAt, Date() < retryAt { return }
-        nextRetryAt = nil
-
-        while let message = pendingMessages.first {
-            if !message.guid.isEmpty && processedGUIDs.contains(message.guid) {
-                recordDuplicateSuppression()
-                finishProcessing(message, rememberGUID: false)
-                continue
-            }
-            if !message.freshWhenRead {
-                recordOldMessageSuppression()
-                finishProcessing(message, rememberGUID: true)
-                setStatus("Ignored an old, undated, or unexpected future message.")
-                continue
-            }
-            break
-        }
-
-        guard let queuedMessage = pendingMessages.first else { return }
-        var message = queuedMessage
-        let ageLimit = TimeInterval(settings.maximumMessageAgeMinutes * 60)
-        let expiredRows = Array(pendingMessages.prefix { Date().timeIntervalSince($0.firstReadAt) > ageLimit })
-        if !expiredRows.isEmpty {
-            let count = expiredRows.count
-            let summary = count == 1
-                ? "1 message arrived while this PC was unreachable"
-                : "\(count) messages arrived while this PC was unreachable"
-            relayInProgress = true
-            let summaryIdentity = expiredRows.map { $0.guid.isEmpty ? "rowid:\($0.rowID)" : $0.guid }.joined(separator: "\n")
-            sendPing(sender: "", preview: summary, kind: .message, messageIdentity: summaryIdentity) { [weak self] outcome, reason in
-                guard let self else { return }
-                self.queue.async {
-                    self.relayInProgress = false
-                    if outcome == .delivered {
-                        for row in expiredRows { self.finishProcessing(row, rememberGUID: true) }
-                        self.catchUpSummaryCount += count
-                        UserDefaults.standard.set(self.catchUpSummaryCount, forKey: RelayPreferences.catchUpSummaryCount)
-                        let total = self.catchUpSummaryCount
-                        DispatchQueue.main.async { self.catchUpSummaryCount = total }
-                        self.recordSuccessfulNotification()
-                        self.setStatus("Catch-up summary sent to Windows.", level: .ok)
-                        self.resetRetryState()
-                        self.pumpDelivery()
-                    } else {
-                        self.handleDeliveryFailure(outcome: outcome, reason: reason)
-                    }
-                }
-            }
+        let step = delivery.next()
+        let configuration = RelayEndpointConfiguration(settings: settings)
+        switch step {
+        case .idle, .busy, .paused:
             return
-        }
-
-        relayInProgress = true
-        if settings.includeSenderNames && !message.senderNameWasResolved {
-            message.resolvedSenderName = contactName(for: message.senderAddress)
-            message.senderNameWasResolved = true
-            pendingMessages[0] = message
-        }
-        let groupName = message.groupName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let participant = settings.includeSenderNames ? (message.resolvedSenderName ?? "") : ""
-        let sender = groupName.isEmpty ? participant : (participant.isEmpty ? groupName : "\(groupName) · \(participant)")
-        let preview = message.isAssociatedMessage ? "Associated message event received" : (settings.includeMessagePreviews ? message.preview : "")
-        let messageIdentity = message.guid.isEmpty ? "rowid:\(message.rowID)" : message.guid
-        sendPing(sender: sender, preview: preview, kind: .message, messageIdentity: messageIdentity) { [weak self] outcome, reason in
-            guard let self else { return }
-            self.queue.async {
-                self.relayInProgress = false
-                if outcome == .delivered {
-                    self.finishProcessing(message, rememberGUID: true)
-                    self.recordSuccessfulNotification()
-                    self.setStatus("New message alert sent to Windows.", level: .ok)
-                    self.resetRetryState()
-                    self.pumpDelivery()
-                } else {
-                    self.handleDeliveryFailure(outcome: outcome, reason: reason)
-                }
+        case .waitUntil(let date):
+            scheduleRetry(at: date)
+        case .sendCatchUp(let rows, let summary):
+            let identity = rows.map(\.identity).joined(separator: "\n")
+            client.send(path: "/notify", method: "POST", preview: summary, kind: .message,
+                        messageIdentity: identity, configuration: configuration) { [weak self] outcome, reason in
+                self?.queue.async { self?.finishDelivery(step, outcome: outcome, reason: reason) }
+            }
+        case .send(let queued):
+            var message = queued
+            if settings.includeSenderNames && !message.senderNameWasResolved {
+                let name = contacts.name(for: message.senderAddress, overrides: settings.senderNameOverrides)
+                delivery.recordResolvedName(name, forRowID: message.rowID)
+                message.resolvedSenderName = name
+            }
+            let groupName = message.groupName.trimmingCharacters(in: .whitespacesAndNewlines)
+            let participant = settings.includeSenderNames ? (message.resolvedSenderName ?? "") : ""
+            let sender = groupName.isEmpty ? participant : (participant.isEmpty ? groupName : "\(groupName) · \(participant)")
+            let preview = message.isAssociatedMessage
+                ? "Associated message event received"
+                : (settings.includeMessagePreviews ? message.preview : "")
+            client.send(path: "/notify", method: "POST", sender: sender, preview: preview, kind: .message,
+                        messageIdentity: message.identity, configuration: configuration) { [weak self] outcome, reason in
+                self?.queue.async { self?.finishDelivery(step, outcome: outcome, reason: reason) }
             }
         }
     }
 
-    private func handleDeliveryFailure(outcome: DeliveryOutcome, reason: String) {
+    private func finishDelivery(_ step: DeliveryStep, outcome: DeliveryOutcome, reason: String) {
+        let retryAt = delivery.complete(step, outcome: outcome)
         switch outcome {
-        case .rejected:
-            deliveryPaused = true
-            nextRetryAt = Date().addingTimeInterval(60)
-            setStatus("Windows rejected the request — check the pairing token and the Mac's clock", level: .error)
-            queue.asyncAfter(deadline: .now() + .seconds(60)) { [weak self] in
-                guard let self else { return }
-                self.deliveryPaused = false
-                self.pumpDelivery()
+        case .delivered:
+            if case .sendCatchUp(let rows, _) = step {
+                catchUpTotal += rows.count
+                defaults.set(catchUpTotal, forKey: RelayPreferences.catchUpSummaryCount)
+                let total = catchUpTotal
+                DispatchQueue.main.async { self.catchUpSummaryCount = total }
+                setStatus("Catch-up summary sent to Windows.", level: .ok)
+            } else {
+                setStatus("New message alert sent to Windows.", level: .ok)
             }
+            recordSuccessfulNotification()
+            pumpDelivery()
+        case .rejected:
+            setStatus("Windows rejected the request — check the pairing token and the Mac's clock", level: .error)
+            if let retryAt { scheduleRetry(at: retryAt) }
         case .notFound:
-            deliveryPaused = true
             setStatus("Windows does not recognize this request. Update the Windows receiver.", level: .error)
         case .transient:
-            let base = min(60, 2 << min(retryAttempt, 5))
-            retryAttempt += 1
-            let delay = min(60, base + Int.random(in: 0...min(2, 60 - base)))
-            nextRetryAt = Date().addingTimeInterval(TimeInterval(delay))
-            setStatus("Message waiting to relay; retrying in about \(delay) seconds: \(reason)", level: .warning)
-        case .delivered:
-            break
+            let seconds = max(1, Int((retryAt?.timeIntervalSinceNow ?? 1).rounded()))
+            setStatus("Message waiting to relay; retrying in about \(seconds) seconds: \(reason)", level: .warning)
+            if let retryAt { scheduleRetry(at: retryAt) }
         }
     }
 
-    private func resetRetryState() {
-        retryAttempt = 0
-        nextRetryAt = nil
-        deliveryPaused = false
+    private func scheduleRetry(at date: Date) {
+        retryWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.pumpDelivery() }
+        retryWork = work
+        queue.asyncAfter(deadline: .now() + max(0, date.timeIntervalSinceNow), execute: work)
     }
 
-    private func finishProcessing(_ message: IncomingMessage, rememberGUID: Bool) {
-        guard !pendingMessages.isEmpty, pendingMessages[0].rowID == message.rowID else { return }
-        pendingMessages.removeFirst()
-        pendingRowIDs.remove(message.rowID)
-        lastIncomingRowID = message.rowID
-        UserDefaults.standard.set(message.rowID, forKey: RelayPreferences.lastDeliveredIncomingMessageRowID)
-        if rememberGUID && !message.guid.isEmpty {
-            if processedGUIDs.insert(message.guid).inserted {
-                processedGUIDOrder.append(message.guid)
-                if processedGUIDOrder.count > 500 {
-                    processedGUIDs.remove(processedGUIDOrder.removeFirst())
-                }
-                UserDefaults.standard.set(processedGUIDOrder, forKey: RelayPreferences.recentlyProcessedMessageGUIDs)
-            }
-        }
-    }
-
-    private func recordOldMessageSuppression() {
-        suppressedOldMessageTotal += 1
-        UserDefaults.standard.set(suppressedOldMessageTotal, forKey: RelayPreferences.suppressedOldMessageCount)
-        let count = suppressedOldMessageTotal
-        DispatchQueue.main.async { self.suppressedOldMessageCount = count }
-    }
-
-    private func recordDuplicateSuppression() {
-        duplicateMessageTotal += 1
-        UserDefaults.standard.set(duplicateMessageTotal, forKey: RelayPreferences.duplicateMessageCount)
-        let count = duplicateMessageTotal
-        DispatchQueue.main.async { self.duplicateMessageCount = count }
+    private func cancelRetry() {
+        retryWork?.cancel()
+        retryWork = nil
     }
 
     private func recordSuccessfulNotification() {
         let date = Date()
-        UserDefaults.standard.set(date, forKey: RelayPreferences.lastSuccessfulNotification)
+        defaults.set(date, forKey: RelayPreferences.lastSuccessfulNotification)
         DispatchQueue.main.async { self.lastSuccessfulNotification = date }
-    }
-
-    private func sqliteErrorDescription(_ code: Int32) -> String {
-        if code == SQLITE_CANTOPEN || code == SQLITE_AUTH || code == SQLITE_PERM {
-            return "Can't read Messages. Give the built app Full Disk Access in System Settings → Privacy & Security."
-        }
-        return "Messages database is temporarily unavailable (SQLite error \(code))."
     }
 
     private func updateTimestampUnitSummary() {
@@ -599,6 +470,8 @@ final class RelayModel: ObservableObject {
         DispatchQueue.main.async { self.timestampUnitSummary = summary }
     }
 
+    // MARK: - Contacts and health
+
     private func requestContactsAccessIfNeeded(enabled: Bool) {
         guard enabled else { return }
         switch CNContactStore.authorizationStatus(for: .contacts) {
@@ -606,7 +479,7 @@ final class RelayModel: ObservableObject {
             setStatus("Monitoring Messages; sender contact names are enabled.", level: .ok)
             setContactLookupSummary("full Contacts access")
         case .notDetermined:
-            contacts.requestAccess(for: .contacts) { [weak self] granted, _ in
+            contactStore.requestAccess(for: .contacts) { [weak self] granted, _ in
                 self?.setStatus(granted
                     ? "Contacts access granted. Sender contact names are enabled."
                     : "Contacts access was declined; notifications will be generic.", level: granted ? .ok : .warning)
@@ -616,116 +489,6 @@ final class RelayModel: ObservableObject {
             setStatus("Contacts access is off; notifications will be generic. Enable it in System Settings → Privacy & Security → Contacts.", level: .warning)
             setContactLookupSummary("Contacts access off or restricted")
         }
-    }
-
-    private func contactName(for address: String) -> String? {
-        guard !address.isEmpty else {
-            setContactLookupSummary("sender address unavailable")
-            return nil
-        }
-
-        let normalizedAddress = normalizeAddress(address)
-        for line in settings.senderNameOverrides.components(separatedBy: .newlines) {
-            guard let separator = line.firstIndex(of: "=") else { continue }
-            let key = normalizeAddress(String(line[..<separator]).trimmingCharacters(in: .whitespacesAndNewlines))
-            let override = String(line[line.index(after: separator)...]).trimmingCharacters(in: .whitespacesAndNewlines)
-            let sameSender = key == normalizedAddress || (!address.contains("@") && phoneNumbersMatch(key, normalizedAddress))
-            if !key.isEmpty, sameSender, !override.isEmpty {
-                setContactLookupSummary("matched a local name override")
-                return String(override.prefix(80))
-            }
-        }
-
-        if let cached = contactNameCache[normalizedAddress] { return cached }
-        if contactNameCacheMisses.contains(normalizedAddress) { return nil }
-
-        guard hasContactAccess else {
-            setContactLookupSummary("Contacts access off or restricted")
-            return nil
-        }
-
-        let keys: [CNKeyDescriptor] = [
-            CNContactGivenNameKey as CNKeyDescriptor,
-            CNContactFamilyNameKey as CNKeyDescriptor,
-            CNContactOrganizationNameKey as CNKeyDescriptor,
-            CNContactPhoneNumbersKey as CNKeyDescriptor,
-            CNContactEmailAddressesKey as CNKeyDescriptor
-        ]
-        let isEmail = normalizedAddress.contains("@")
-        let predicate = isEmail
-            ? CNContact.predicateForContacts(matchingEmailAddress: normalizedAddress)
-            : CNContact.predicateForContacts(matching: CNPhoneNumber(stringValue: address.replacingOccurrences(of: "^tel:", with: "", options: [.regularExpression, .caseInsensitive])))
-
-        if let matches = try? contacts.unifiedContacts(matching: predicate, keysToFetch: keys),
-           let match = matches.first,
-           let name = displayName(for: match) {
-            setContactLookupSummary("matched using Contacts")
-            contactNameCache[normalizedAddress] = name
-            return name
-        }
-
-        // Predicate phone matching can miss equivalent formats (+country code,
-        // punctuation, or a local number). Compare normalized values only among
-        // contacts the user has authorized this app to see.
-        let request = CNContactFetchRequest(keysToFetch: keys)
-        var fallback: String?
-        do {
-            try contacts.enumerateContacts(with: request) { contact, stop in
-                let contactMatches: Bool
-                if isEmail {
-                    contactMatches = contact.emailAddresses.contains {
-                        normalizeAddress(String($0.value)) == normalizedAddress
-                    }
-                } else {
-                    contactMatches = contact.phoneNumbers.contains {
-                        phoneNumbersMatch($0.value.stringValue, address)
-                    }
-                }
-                if contactMatches {
-                    fallback = displayName(for: contact)
-                    stop.pointee = true
-                }
-            }
-        } catch {
-            setContactLookupSummary("contact lookup failed; check Contacts permission")
-            return nil
-        }
-        if fallback != nil {
-            setContactLookupSummary("matched after normalizing the sender address")
-            contactNameCache[normalizedAddress] = fallback!
-        } else {
-            setContactLookupSummary("no matching saved contact")
-            contactNameCacheMisses.insert(normalizedAddress)
-        }
-        return fallback
-    }
-
-    private var hasContactAccess: Bool {
-        let authorization = CNContactStore.authorizationStatus(for: .contacts)
-        return authorization == .authorized
-    }
-
-    private func normalizeAddress(_ address: String) -> String {
-        var value = address.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if value.hasPrefix("mailto:") { value.removeFirst("mailto:".count) }
-        if value.hasPrefix("tel:") { value.removeFirst("tel:".count) }
-        return value.contains("@") ? value : String(value.filter(\.isNumber))
-    }
-
-    private func phoneNumbersMatch(_ lhs: String, _ rhs: String) -> Bool {
-        let leftDigits = lhs.filter(\.isNumber)
-        let rightDigits = rhs.filter(\.isNumber)
-        guard !leftDigits.isEmpty, !rightDigits.isEmpty else { return false }
-        if leftDigits == rightDigits { return true }
-        return leftDigits.count >= 10 && rightDigits.count >= 10 && leftDigits.suffix(10) == rightDigits.suffix(10)
-    }
-
-    private func displayName(for contact: CNContact) -> String? {
-        let personalName = [contact.givenName, contact.familyName]
-            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-            .joined(separator: " ")
-        let name = personalName.isEmpty ? contact.organizationName : personalName
-        return name.isEmpty ? nil : String(name.prefix(80))
     }
 
     private func setContactLookupSummary(_ value: String) {
@@ -740,7 +503,7 @@ final class RelayModel: ObservableObject {
             }
             return
         }
-        sendSignedRequest(path: "/health", method: "GET", sender: "", preview: "", kind: .health, messageIdentity: "") { [weak self] outcome, reason in
+        client.send(path: "/health", method: "GET", kind: .health, configuration: RelayEndpointConfiguration(settings: settings)) { [weak self] outcome, reason in
             DispatchQueue.main.async {
                 guard let self else { return }
                 switch outcome {
@@ -758,92 +521,6 @@ final class RelayModel: ObservableObject {
                     self.windowsHealthLevel = .error
                 }
             }
-        }
-    }
-
-    private enum DeliveryOutcome: Equatable {
-        case delivered, rejected, notFound, transient
-    }
-
-    private func sendPing(sender: String = "", preview: String = "", kind: RelayRequestKind = .message, messageIdentity: String = UUID().uuidString, completion: ((DeliveryOutcome, String) -> Void)? = nil) {
-        sendSignedRequest(path: "/notify", method: "POST", sender: sender, preview: preview, kind: kind, messageIdentity: messageIdentity, completion: completion)
-    }
-
-    private func sendSignedRequest(path: String, method: String, sender: String, preview: String, kind: RelayRequestKind, messageIdentity: String, completion: ((DeliveryOutcome, String) -> Void)?) {
-        let address = settings.windowsAddress
-        let token = settings.pairingToken
-        let useTLSForRequest = settings.useTLS
-        let tlsFingerprintForRequest = settings.tlsCertificateFingerprint
-        guard !token.isEmpty,
-              let url = WindowsRelayEndpoint.url(address: address, path: path, useTLS: useTLSForRequest) else {
-            completion?(.transient, "enter a valid Windows host name/IP and pairing token")
-            return
-        }
-        if useTLSForRequest && !RelayPinnedSessionDelegate.isValidFingerprint(tlsFingerprintForRequest) {
-            completion?(.transient, "enter the 64-character SHA-256 TLS fingerprint shown by Windows")
-            return
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = method
-        request.timeoutInterval = 5
-        let senderBase64 = sender.isEmpty ? "" : Data(sender.utf8).base64EncodedString()
-        let previewBase64 = preview.isEmpty ? "" : Data(preview.utf8).base64EncodedString()
-        let timestamp = String(Int(Date().timeIntervalSince1970))
-        let nonce = UUID().uuidString.lowercased()
-        let messageID = kind == .message ? RelayProtocolV2.messageID(token: token, guid: messageIdentity) : ""
-        let canonical = RelayProtocolV2.canonical(method: method, path: path, timestamp: timestamp, nonce: nonce, kind: kind, messageID: messageID, senderBase64: senderBase64, previewBase64: previewBase64)
-        let signature = RelayProtocolV1.signature(token: token, canonical: canonical)
-        request.setValue("2", forHTTPHeaderField: "X-Relay-Version")
-        request.setValue(kind.rawValue, forHTTPHeaderField: "X-Relay-Kind")
-        request.setValue(messageID, forHTTPHeaderField: "X-Relay-Message-Id")
-        request.setValue(timestamp, forHTTPHeaderField: "X-Relay-Time")
-        request.setValue(nonce, forHTTPHeaderField: "X-Relay-Nonce")
-        request.setValue(signature, forHTTPHeaderField: "X-Relay-Signature")
-        if !senderBase64.isEmpty { request.setValue(senderBase64, forHTTPHeaderField: "X-Sender-Base64") }
-        if !previewBase64.isEmpty { request.setValue(previewBase64, forHTTPHeaderField: "X-Preview-Base64") }
-        let session: URLSession
-        if useTLSForRequest {
-            let delegate = RelayPinnedSessionDelegate(expectedFingerprint: tlsFingerprintForRequest)
-            session = URLSession(configuration: .ephemeral, delegate: delegate, delegateQueue: nil)
-        } else {
-            session = .shared
-        }
-        session.dataTask(with: request) { _, response, error in
-            if useTLSForRequest { session.finishTasksAndInvalidate() }
-            if let error = error {
-                completion?(.transient, error.localizedDescription)
-                return
-            }
-            guard let http = response as? HTTPURLResponse else {
-                completion?(.transient, "no HTTP response")
-                return
-            }
-            let outcome: DeliveryOutcome
-            switch http.statusCode {
-            case 204:
-                outcome = .delivered
-                self.retireLegacyTokenIfMigrated(token: token)
-            case 403:
-                outcome = .rejected
-                let code = http.value(forHTTPHeaderField: "X-Relay-Error") ?? "auth"
-                completion?(outcome, "Windows rejected the request (\(code))")
-                return
-            case 404: outcome = .notFound
-            default: outcome = .transient
-            }
-            completion?(outcome, "Windows returned HTTP \(http.statusCode)")
-        }.resume()
-    }
-
-    private func retireLegacyTokenIfMigrated(token: String) {
-        do {
-            // Only remove the old preference after a signed request using this token
-            // has been accepted by Windows.
-            try KeychainTokenStore().writeToken(token)
-            RelaySettings.retireLegacyToken()
-        } catch {
-            setStatus("Windows accepted a request, but the old token preference could not be removed.", level: .warning)
         }
     }
 

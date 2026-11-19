@@ -1,6 +1,6 @@
 # Bubblecast for Mac — full guide
 
-Bubblecast for Mac is a SwiftUI menu-bar app for macOS 15 Sequoia on Intel or Apple Silicon (a Mac or a macOS VM). It reads the Messages database read-only, filters out old and duplicate rows, optionally resolves contact names, and sends signed notifications to Bubblecast for Windows on your LAN.
+Bubblecast for Mac is a SwiftUI menu-bar app for macOS 13 Ventura and later on Intel or Apple Silicon (a Mac or a macOS VM). It reads the Messages database read-only, filters out old and duplicate rows, optionally resolves contact names, and sends signed notifications to Bubblecast for Windows on your LAN.
 
 ## Install
 
@@ -21,7 +21,7 @@ bash macos/build.command           # build for this Mac, install to ~/Applicatio
 bash macos/build.command package   # universal app and dist/Bubblecast-<version>.dmg (installs nothing)
 ```
 
-The script builds the icon set from `macos/Resources/AppIcon-1024.png`, compiles for macOS 15, signs ad hoc, and (in install mode) asks a running copy to quit before replacing it.
+The script builds the icon set from `macos/Resources/AppIcon-1024.png`, compiles for macOS 13 and later, signs ad hoc, and (in install mode) asks a running copy to quit before replacing it.
 
 To sign with a stable identity instead of ad hoc, set `RELAY_SIGN_IDENTITY` to the name of a signing identity in your Keychain before building. A stable identity keeps Full Disk Access and Contacts permissions across updates.
 
@@ -29,19 +29,25 @@ To sign with a stable identity instead of ad hoc, set `RELAY_SIGN_IDENTITY` to t
 
 - **Full Disk Access** (required): **System Settings → Privacy & Security → Full Disk Access**, then add Bubblecast (`/Applications/Bubblecast.app`, or `~/Applications/Bubblecast.app` if you built it yourself). This lets the app read `~/Library/Messages/chat.db`.
 - **Contacts** (optional): allow it to show sender names. Without it, notifications are generic unless you add name overrides.
-- **Local Network**: allow it if macOS asks.
+- **Local Network**: allow it when macOS asks. Bubblecast uses it to find your PC and to send it notifications.
 
 ## Pairing
 
-1. Open Bubblecast on Windows and note **This PC's address** and the **Pairing token**.
-2. Open Bubblecast from the Mac menu bar and enter the Windows host name, IPv4 address, or bracketed IPv6 address, plus the token.
-3. Click **Save**, then **Send test**. A test notification appears on Windows.
+1. Open Bubblecast on Windows and copy the **Pairing token**.
+2. Open Bubblecast from the Mac menu bar. Under **Windows PC address**, your PC appears in *Found on your network*; click **Use**. (Or type its host name, IPv4 address, or bracketed IPv6 address.)
+3. Paste the token and click **Save**.
+4. With **Use pinned TLS** on (the default), the Mac contacts Windows and fills in the certificate fingerprint it learned. Check that it matches the **TLS certificate fingerprint** shown on Windows, then click **Save** again to pin it.
+5. Click **Send test**. A test notification appears on Windows.
 
-The token is stored in the Mac Keychain. Requests go to Windows on TCP `8765` over HTTP and are signed with HMAC-SHA256.
+The token is stored in the Mac Keychain, and every request is signed with HMAC-SHA256.
 
-### Pinned TLS (optional)
+### TLS and the certificate fingerprint
 
-To encrypt notifications on the LAN, copy the **TLS certificate fingerprint** from Windows, turn on **Use pinned TLS**, paste the 64-character SHA-256 fingerprint, and save. The Mac then connects on TCP `8766` and only trusts that exact certificate. HTTP on `8765` remains available if you turn TLS off.
+With pinned TLS on, the Mac connects to Windows on TCP `8766` and only trusts the exact certificate whose SHA-256 fingerprint you saved. Leaving the fingerprint blank and saving lets the Mac learn it from Windows the first time (trust on first use); you can also paste it from Windows yourself. If you turn TLS off, requests use HTTP on TCP `8765`; they are still signed, but not encrypted.
+
+### Discovery
+
+Bubblecast on Windows announces itself as `_bubblecast._tcp` on the local network, and the Mac lists every receiver it finds. A chosen PC is addressed as `<PC name>.local`, so it keeps working when the PC's IP address changes. Discovery only finds the PC; pairing still needs the token. If your PC doesn't appear, check that both machines are on the same network, that **Let the Mac find this PC** is on in Windows Advanced settings, and that Bubblecast has Local Network permission in **System Settings → Privacy & Security → Local Network**.
 
 ## Settings
 
@@ -54,7 +60,7 @@ To encrypt notifications on the LAN, copy the **TLS certificate fingerprint** fr
 
 ## Delivery behavior
 
-- New messages are picked up within about three seconds.
+- New messages are picked up as soon as Messages writes them (the app watches the database files, with a 5-second fallback check).
 - If Windows is unreachable, messages wait and retry with backoff. Messages that were fresh when first read but wait longer than the maximum age are delivered as one count-only catch-up alert once Windows is reachable again.
 - If Windows rejects a request (wrong token or clock skew), delivery pauses and the reason is shown in the status card.
 - Duplicate rows are suppressed by message ID on both sides.
@@ -86,5 +92,6 @@ See the [protocol notes and test vectors](PROTOCOL.md) for the request format sh
 - **"Bubblecast can't be opened"**: use **Open Anyway** in **System Settings → Privacy & Security**.
 - **Rejected — check the pairing token or Mac clock**: re-copy the token from Windows, and make sure both clocks are within two minutes of each other.
 - **Unreachable**: check the Windows address, that Bubblecast is running on Windows, and that the Windows firewall allows the port on your private network.
+- **Couldn't reach Windows over TLS**: check that Windows shows a TLS certificate fingerprint (port `8766`) and that the firewall allows it; or turn TLS off to use HTTP.
 - **Copy privacy-safe diagnostics** (under Advanced) copies counts and status only. It excludes addresses, tokens, sender names, and message text.
 - Never share `chat.db`, logs, or screenshots that show your token.

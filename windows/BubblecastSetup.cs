@@ -9,6 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Microsoft.Win32;
+using Bubblecast;
 
 [assembly: AssemblyTitle("Bubblecast Setup")]
 [assembly: AssemblyProduct("Bubblecast Setup")]
@@ -103,7 +104,7 @@ internal static class BubblecastSetup
         string uninstallPath = Path.Combine(destination, "Uninstall Bubblecast.exe");
         File.Copy(Application.ExecutablePath, uninstallPath, true);
         string iconPath = Path.Combine(destination, "Bubblecast.ico");
-        using (Stream icon = Assembly.GetExecutingAssembly().GetManifestResourceStream("BubblecastSetup.Icon.ico"))
+        using (Stream icon = Assembly.GetExecutingAssembly().GetManifestResourceStream("Bubblecast.AppIcon.ico"))
         {
             if (icon != null)
                 using (FileStream output = File.Create(iconPath)) icon.CopyTo(output);
@@ -269,30 +270,25 @@ internal static class BubblecastSetup
     private static extern bool MoveFileEx(string existingName, string newName, int flags);
 
     // ───────────────────────────── Setup window ─────────────────────────────
-    // Same design system as the receiver's Settings window (shadcn/ui zinc light/dark, rounded cards,
-    // owner-drawn fields, switches, and buttons). Setup is compiled on its own, so these controls are
-    // compact copies of the receiver's rather than shared code.
+    // Built from the same controls and layout helpers as the receiver's Settings window
+    // (windows/shared/BubblecastUi.cs), compiled into both executables.
 
     private sealed class InstallerForm : Form
     {
-        private const int DwmUseImmersiveDarkMode = 20;
         private readonly TableLayoutPanel _root;
         private readonly TextBox _folder;
         private readonly Label _progressLabel;
-        private readonly SetupProgress _progress;
-        private readonly SetupButton _installButton;
-        private readonly SetupButton _cancelButton;
-        private readonly SetupButton _browseButton;
-        private readonly SetupSwitch _startMenu;
-        private readonly SetupSwitch _desktop;
-        private readonly SetupSwitch _startup;
-        private readonly SetupSwitch _launch;
-        private SetupPalette _palette;
+        private readonly ProgressLine _progress;
+        private readonly RelayButton _installButton;
+        private readonly RelayButton _cancelButton;
+        private readonly RelayButton _browseButton;
+        private readonly RelaySwitch _startMenu;
+        private readonly RelaySwitch _desktop;
+        private readonly RelaySwitch _startup;
+        private readonly RelaySwitch _launch;
+        private RelayPalette _palette;
         private bool _installing;
         private bool _failed;
-
-        [DllImport("dwmapi.dll")]
-        private static extern int DwmSetWindowAttribute(IntPtr window, int attribute, ref int value, int size);
 
         public InstallerForm()
         {
@@ -307,80 +303,82 @@ internal static class BubblecastSetup
             MaximizeBox = false;
             MinimizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
+            AutoScaleDimensions = new SizeF(96F, 96F);
+            AutoScaleMode = AutoScaleMode.Dpi;
             Font = baseFont;
-            Icon = LoadEmbeddedIcon() ?? Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application;
+            Icon = BrandAssets.AppIcon(Size.Empty) ?? Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application;
             ClientSize = new Size(600, 640);
 
-            _root = Stack();
+            _root = UiLayout.NewStack();
             _root.Dock = DockStyle.Top;
 
             // Header: identity, matching the receiver's header.
-            TableLayoutPanel header = new TableLayoutPanel { ColumnCount = 3, RowCount = 1, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top, Padding = new Padding(24, 18, 24, 18), Margin = Padding.Empty, Tag = SetupRole.Surface };
+            TableLayoutPanel header = new TableLayoutPanel { ColumnCount = 3, RowCount = 1, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top, Padding = new Padding(24, 18, 24, 18), Margin = Padding.Empty, Tag = UiRole.Surface };
             header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             header.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            PictureBox appIcon = new PictureBox { Image = LoadBrandMark(36) ?? Icon.ToBitmap(), SizeMode = PictureBoxSizeMode.Zoom, Size = new Size(36, 36), Anchor = AnchorStyles.Left, Margin = new Padding(0, 0, 12, 0), AccessibleRole = AccessibleRole.Graphic, AccessibleName = AppName };
-            TableLayoutPanel titleStack = Stack();
+            PictureBox appIcon = new PictureBox { Image = BrandAssets.Mark(UiPaint.Px(36)) ?? Icon.ToBitmap(), SizeMode = PictureBoxSizeMode.Zoom, Size = new Size(36, 36), Anchor = AnchorStyles.Left, Margin = new Padding(0, 0, 12, 0), AccessibleRole = AccessibleRole.Graphic, AccessibleName = AppName };
+            TableLayoutPanel titleStack = UiLayout.NewStack();
             titleStack.Anchor = AnchorStyles.Left | AnchorStyles.Right;
-            AddRow(titleStack, MakeText(AppName, SetupRole.Body, titleFont, Padding.Empty));
-            AddRow(titleStack, MakeText("Private LAN notifications from your Mac VM", SetupRole.Muted, baseFont, Padding.Empty));
-            SetupBadge badge = new SetupBadge { Text = "Setup · " + Assembly.GetExecutingAssembly().GetName().Version.ToString(3), Font = labelFont, Anchor = AnchorStyles.Right, Margin = new Padding(12, 0, 0, 0) };
+            UiLayout.AddRow(titleStack, UiLayout.MakeText(AppName, UiRole.Body, titleFont, Padding.Empty));
+            UiLayout.AddRow(titleStack, UiLayout.MakeText("Private LAN notifications from your Mac VM", UiRole.Muted, baseFont, Padding.Empty));
+            BadgeLabel badge = new BadgeLabel { Text = "Setup · " + Assembly.GetExecutingAssembly().GetName().Version.ToString(3), Font = labelFont, Anchor = AnchorStyles.Right, Margin = new Padding(12, 0, 0, 0), Tone = StatusTone.Neutral };
             header.Controls.Add(appIcon, 0, 0);
             header.Controls.Add(titleStack, 1, 0);
             header.Controls.Add(badge, 2, 0);
-            AddRow(_root, header);
-            AddRow(_root, new SetupHairline { Margin = Padding.Empty });
+            UiLayout.AddRow(_root, header);
+            UiLayout.AddRow(_root, new Hairline { Margin = Padding.Empty });
 
             // Body: two cards and a note.
-            TableLayoutPanel body = Stack();
+            TableLayoutPanel body = UiLayout.NewStack();
             body.Padding = new Padding(24, 20, 24, 0);
-            body.Tag = SetupRole.Page;
+            body.Tag = UiRole.Page;
 
-            SetupCard location = NewCard("Install location", "Choose where Bubblecast will be installed.", sectionFont, smallFont);
+            CardPanel location = UiLayout.NewCard("Install location", "Choose where " + AppName + " will be installed.", sectionFont, smallFont);
             _folder = new TextBox { Text = DefaultInstallDirectory(), AccessibleName = "Install folder" };
-            _browseButton = new SetupButton("Browse…", false) { AccessibleName = "Choose the install folder" };
+            _browseButton = new RelayButton("Browse…", ButtonKind.Secondary) { AccessibleName = "Choose the install folder" };
             _browseButton.Click += delegate { BrowseForFolder(); };
-            AddRow(location, InlineRow(new SetupField(_folder), _browseButton));
-            AddRow(location, MakeText("Use a dedicated folder under Program Files. Updates replace the app in place.", SetupRole.Muted, smallFont, new Padding(0, 6, 0, 16)));
-            AddRow(body, location);
+            UiLayout.AddRow(location, UiLayout.InlineRow(new FieldHost(_folder, 1), _browseButton));
+            UiLayout.AddHelp(location, "Use a dedicated folder under Program Files. Updates replace the app in place.", smallFont);
+            UiLayout.AddRow(body, location);
 
-            SetupCard options = NewCard("Shortcuts and startup", "Choose shortcuts and what happens when you sign in.", sectionFont, smallFont);
-            _startMenu = new SetupSwitch { Checked = true };
-            _desktop = new SetupSwitch { Checked = false };
-            _startup = new SetupSwitch { Checked = true };
-            _launch = new SetupSwitch { Checked = true };
-            AddRow(options, ActionRow("Start menu shortcuts", "Add app and uninstall links to Start.", _startMenu, labelFont, smallFont));
-            AddRow(options, new SetupHairline());
-            AddRow(options, ActionRow("Desktop shortcut", "Add an app shortcut to the desktop.", _desktop, labelFont, smallFont));
-            AddRow(options, new SetupHairline());
-            AddRow(options, ActionRow("Start at sign-in", "Start quietly in the notification area.", _startup, labelFont, smallFont));
-            AddRow(options, new SetupHairline());
-            AddRow(options, ActionRow("Open Settings after setup", "Show the pairing details when setup finishes.", _launch, labelFont, smallFont));
-            AddRow(body, options);
-            AddRow(body, MakeText("Setup asks a running Bubblecast to close before replacing it. No firewall rule is added.", SetupRole.Muted, smallFont, new Padding(2, 0, 2, 20)));
-            AddRow(_root, body);
+            CardPanel options = UiLayout.NewCard("Shortcuts and startup", "Choose shortcuts and what happens when you sign in.", sectionFont, smallFont);
+            _startMenu = new RelaySwitch { Checked = true };
+            _desktop = new RelaySwitch { Checked = false };
+            _startup = new RelaySwitch { Checked = true };
+            _launch = new RelaySwitch { Checked = true };
+            UiLayout.AddRow(options, UiLayout.ActionRow("Start menu shortcuts", "Add app and uninstall links to Start.", _startMenu, labelFont, smallFont));
+            UiLayout.AddSeparator(options);
+            UiLayout.AddRow(options, UiLayout.ActionRow("Desktop shortcut", "Add an app shortcut to the desktop.", _desktop, labelFont, smallFont));
+            UiLayout.AddSeparator(options);
+            UiLayout.AddRow(options, UiLayout.ActionRow("Start at sign-in", "Start quietly in the notification area.", _startup, labelFont, smallFont));
+            UiLayout.AddSeparator(options);
+            UiLayout.AddRow(options, UiLayout.ActionRow("Open Settings after setup", "Show the pairing details when setup finishes.", _launch, labelFont, smallFont));
+            UiLayout.AddRow(body, options);
+            UiLayout.AddRow(body, UiLayout.MakeText("Setup asks a running " + AppName + " to close before replacing it. No firewall rule is added.", UiRole.Muted, smallFont, new Padding(2, 0, 2, 20)));
+            UiLayout.AddRow(_root, body);
 
             // Footer: progress on the left, Cancel and Install on the right.
-            AddRow(_root, new SetupHairline { Margin = Padding.Empty });
-            TableLayoutPanel footer = new TableLayoutPanel { ColumnCount = 3, RowCount = 1, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top, Padding = new Padding(24, 16, 24, 16), Margin = Padding.Empty, Tag = SetupRole.Surface };
+            UiLayout.AddRow(_root, new Hairline { Margin = Padding.Empty });
+            TableLayoutPanel footer = new TableLayoutPanel { ColumnCount = 3, RowCount = 1, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top, Padding = new Padding(24, 16, 24, 16), Margin = Padding.Empty, Tag = UiRole.Surface };
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             footer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            TableLayoutPanel status = Stack();
+            TableLayoutPanel status = UiLayout.NewStack();
             status.Anchor = AnchorStyles.Left | AnchorStyles.Right;
             status.Margin = new Padding(0, 0, 16, 0);
-            _progressLabel = new Label { Text = "Ready to install", AutoSize = false, AutoEllipsis = true, UseMnemonic = false, Height = baseFont.Height + 2, Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top, Margin = Padding.Empty, Tag = SetupRole.Status, AccessibleName = "Setup status" };
-            _progress = new SetupProgress { Height = 6, Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top, Margin = new Padding(0, 8, 0, 0), AccessibleName = "Setup progress" };
-            AddRow(status, _progressLabel);
-            AddRow(status, _progress);
-            _cancelButton = new SetupButton("Cancel", false) { Anchor = AnchorStyles.Right, Margin = new Padding(0, 0, 8, 0) };
-            _installButton = new SetupButton("Install", true) { Anchor = AnchorStyles.Right, Margin = Padding.Empty };
+            _progressLabel = new Label { Text = "Ready to install", AutoSize = false, AutoEllipsis = true, UseMnemonic = false, Height = baseFont.Height + 2, Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top, Margin = Padding.Empty, Tag = UiRole.Body, AccessibleName = "Setup status" };
+            _progress = new ProgressLine { Height = 6, Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top, Margin = new Padding(0, 8, 0, 0), AccessibleName = "Setup progress" };
+            UiLayout.AddRow(status, _progressLabel);
+            UiLayout.AddRow(status, _progress);
+            _cancelButton = new RelayButton("Cancel", ButtonKind.Secondary) { Anchor = AnchorStyles.Right, Margin = new Padding(0, 0, 8, 0) };
+            _installButton = new RelayButton("Install", ButtonKind.Primary) { Anchor = AnchorStyles.Right, Margin = Padding.Empty };
             footer.Controls.Add(status, 0, 0);
             footer.Controls.Add(_cancelButton, 1, 0);
             footer.Controls.Add(_installButton, 2, 0);
-            AddRow(_root, footer);
+            UiLayout.AddRow(_root, footer);
 
             Controls.Add(_root);
             AcceptButton = _installButton;
@@ -392,66 +390,31 @@ internal static class BubblecastSetup
             _installButton.Click += delegate { StartInstall(); };
             FormClosing += delegate(object sender, FormClosingEventArgs args) { if (_installing) args.Cancel = true; };
 
-            // Fit the window to its content.
+            // Fit the window to its content (after DPI scaling).
             Load += delegate { ClientSize = new Size(ClientSize.Width, _root.Height); };
             Shown += delegate
             {
-                ApplyTheme(SetupPalette.Current());
+                ApplyTheme(RelayPalette.Current());
                 _folder.Select(_folder.TextLength, 0);
                 _installButton.Focus();
             };
 
-            ApplyTheme(SetupPalette.Current());
+            ApplyTheme(RelayPalette.Current());
             UserPreferenceChangedEventHandler themeChanged = delegate(object sender, UserPreferenceChangedEventArgs args)
             {
                 if (args.Category != UserPreferenceCategory.General && args.Category != UserPreferenceCategory.Color && args.Category != UserPreferenceCategory.Accessibility && args.Category != UserPreferenceCategory.VisualStyle) return;
                 if (IsDisposed || !IsHandleCreated) return;
-                BeginInvoke((MethodInvoker)delegate { if (!IsDisposed) ApplyTheme(SetupPalette.Current()); });
+                BeginInvoke((MethodInvoker)delegate { if (!IsDisposed) ApplyTheme(RelayPalette.Current()); });
             };
             SystemEvents.UserPreferenceChanged += themeChanged;
             FormClosed += delegate { SystemEvents.UserPreferenceChanged -= themeChanged; };
-        }
-
-        /// <summary>The embedded multi-size icon, so the title bar uses native frames.</summary>
-        private static Icon LoadEmbeddedIcon()
-        {
-            try
-            {
-                using (Stream stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("BubblecastSetup.Icon.ico"))
-                    return stream == null ? null : new Icon(stream);
-            }
-            catch (Exception) { return null; }
-        }
-
-        /// <summary>The 256 px brand mark, downscaled with high-quality resampling (never upscaled).</summary>
-        private static Image LoadBrandMark(int pixels)
-        {
-            try
-            {
-                using (Stream stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("BubblecastSetup.BrandMark.png"))
-                {
-                    if (stream == null) return null;
-                    using (Bitmap source = new Bitmap(stream))
-                    {
-                        Bitmap result = new Bitmap(pixels, pixels);
-                        using (Graphics graphics = Graphics.FromImage(result))
-                        {
-                            graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
-                            graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
-                            graphics.DrawImage(source, 0, 0, pixels, pixels);
-                        }
-                        return result;
-                    }
-                }
-            }
-            catch (Exception) { return null; }
         }
 
         private void BrowseForFolder()
         {
             using (FolderBrowserDialog dialog = new FolderBrowserDialog())
             {
-                dialog.Description = "Choose where to install Bubblecast";
+                dialog.Description = "Choose where to install " + AppName;
                 string selected = Path.GetDirectoryName(_folder.Text);
                 dialog.SelectedPath = Directory.Exists(selected) ? selected : DefaultInstallDirectory();
                 if (dialog.ShowDialog(this) == DialogResult.OK)
@@ -530,569 +493,12 @@ internal static class BubblecastSetup
                 _progressLabel.ForeColor = _failed ? _palette.Destructive : _palette.Foreground;
         }
 
-        private void ApplyTheme(SetupPalette palette)
+        private void ApplyTheme(RelayPalette palette)
         {
             _palette = palette;
-            SuspendLayout();
-            BackColor = palette.Page;
-            ForeColor = palette.Foreground;
-            foreach (Control child in Controls)
-                ApplyPalette(child, palette, palette.Page);
+            UiLayout.ApplyTheme(this, palette);
             UpdateStatusColor();
-            ResumeLayout(true);
-            if (IsHandleCreated)
-            {
-                int dark = palette.UseDarkChrome ? 1 : 0;
-                try { DwmSetWindowAttribute(Handle, DwmUseImmersiveDarkMode, ref dark, sizeof(int)); }
-                catch (Exception) { }
-            }
-            Invalidate(true);
-        }
-
-        private static void ApplyPalette(Control control, SetupPalette palette, Color inherited)
-        {
-            Color childBackground;
-            ISetupThemed themed = control as ISetupThemed;
-            if (themed != null)
-                childBackground = themed.ApplyPalette(palette, inherited);
-            else
-            {
-                SetupRole role = control.Tag is SetupRole ? (SetupRole)control.Tag : SetupRole.None;
-                childBackground = role == SetupRole.Page ? palette.Page : role == SetupRole.Surface ? palette.Card : inherited;
-                control.BackColor = childBackground;
-                control.ForeColor = role == SetupRole.Muted ? palette.MutedForeground : palette.Foreground;
-            }
-            foreach (Control child in control.Controls)
-                ApplyPalette(child, palette, childBackground);
-        }
-
-        private static TableLayoutPanel Stack()
-        {
-            TableLayoutPanel stack = new TableLayoutPanel { ColumnCount = 1, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Margin = Padding.Empty, Padding = Padding.Empty, Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top, GrowStyle = TableLayoutPanelGrowStyle.AddRows };
-            stack.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            return stack;
-        }
-
-        private static void AddRow(TableLayoutPanel table, Control control)
-        {
-            int row = table.RowStyles.Count;
-            table.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            table.RowCount = row + 1;
-            table.Controls.Add(control, 0, row);
-        }
-
-        private static Label MakeText(string text, SetupRole role, Font font, Padding margin)
-        {
-            return new Label { Text = text, AutoSize = true, Font = font, Tag = role, UseMnemonic = false, Margin = margin, Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top };
-        }
-
-        private static SetupCard NewCard(string title, string description, Font titleFont, Font descriptionFont)
-        {
-            SetupCard card = new SetupCard();
-            AddRow(card, MakeText(title, SetupRole.Body, titleFont, new Padding(0, 0, 0, 2)));
-            AddRow(card, MakeText(description, SetupRole.Muted, descriptionFont, new Padding(0, 0, 0, 16)));
-            return card;
-        }
-
-        private static TableLayoutPanel InlineRow(Control fill, Control trailing)
-        {
-            TableLayoutPanel row = new TableLayoutPanel { ColumnCount = 2, RowCount = 1, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Margin = Padding.Empty, Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top };
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            row.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            fill.Anchor = AnchorStyles.Left | AnchorStyles.Right;
-            fill.Margin = Padding.Empty;
-            trailing.Anchor = AnchorStyles.None;
-            trailing.Margin = new Padding(8, 0, 0, 0);
-            row.Controls.Add(fill, 0, 0);
-            row.Controls.Add(trailing, 1, 0);
-            return row;
-        }
-
-        /// <summary>Title and description on the left, the switch on the right; clicking the text toggles it.</summary>
-        private static TableLayoutPanel ActionRow(string title, string description, SetupSwitch toggle, Font titleFont, Font descriptionFont)
-        {
-            TableLayoutPanel row = new TableLayoutPanel { ColumnCount = 2, RowCount = 2, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Margin = new Padding(0, 0, 0, 12), Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top };
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            row.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            row.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            Label titleLabel = MakeText(title, SetupRole.Body, titleFont, new Padding(0, 0, 0, 2));
-            Label descriptionLabel = MakeText(description, SetupRole.Muted, descriptionFont, Padding.Empty);
-            toggle.Anchor = AnchorStyles.Right;
-            toggle.Margin = new Padding(16, 0, 0, 0);
-            toggle.AccessibleName = title;
-            toggle.AccessibleDescription = description;
-            row.Controls.Add(titleLabel, 0, 0);
-            row.Controls.Add(descriptionLabel, 0, 1);
-            row.Controls.Add(toggle, 1, 0);
-            row.SetRowSpan(toggle, 2);
-            EventHandler flip = delegate
-            {
-                if (!toggle.Enabled) return;
-                toggle.Checked = !toggle.Checked;
-                toggle.Focus();
-            };
-            titleLabel.Click += flip;
-            descriptionLabel.Click += flip;
-            return row;
         }
     }
 
-    private enum SetupRole { None, Page, Surface, Body, Muted, Status }
-
-    private interface ISetupThemed
-    {
-        /// <summary>Applies the palette and returns the background its children sit on.</summary>
-        Color ApplyPalette(SetupPalette palette, Color inherited);
-    }
-
-    private sealed class SetupPalette
-    {
-        public bool IsDark;
-        public bool IsHighContrast;
-        public Color Page, Card, Muted, Border, Input, Ring, Foreground, MutedForeground, Primary, PrimaryForeground, Destructive;
-
-        public bool UseDarkChrome { get { return IsDark && !IsHighContrast; } }
-
-        public static SetupPalette Current()
-        {
-            if (SystemInformation.HighContrast)
-            {
-                Color window = SystemColors.Window;
-                Color text = SystemColors.WindowText;
-                return new SetupPalette { IsHighContrast = true, Page = window, Card = window, Muted = window, Border = text, Input = text, Ring = SystemColors.Highlight, Foreground = text, MutedForeground = text, Primary = SystemColors.Highlight, PrimaryForeground = SystemColors.HighlightText, Destructive = text };
-            }
-            bool dark = false;
-            try
-            {
-                using (RegistryKey key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"))
-                    dark = key != null && Convert.ToInt32(key.GetValue("AppsUseLightTheme", 1)) == 0;
-            }
-            catch { }
-            return dark ? Dark() : Light();
-        }
-
-        public static SetupPalette Light()
-        {
-            return new SetupPalette { Page = Hex(0xFAFAFA), Card = Hex(0xFFFFFF), Muted = Hex(0xF4F4F5), Border = Hex(0xE4E4E7), Input = Hex(0xD4D4D8), Ring = Hex(0xA1A1AA), Foreground = Hex(0x09090B), MutedForeground = Hex(0x71717A), Primary = Hex(0x18181B), PrimaryForeground = Hex(0xFAFAFA), Destructive = Hex(0xB91C1C) };
-        }
-
-        public static SetupPalette Dark()
-        {
-            return new SetupPalette { IsDark = true, Page = Hex(0x09090B), Card = Hex(0x111113), Muted = Hex(0x1C1C1F), Border = Hex(0x27272A), Input = Hex(0x3F3F46), Ring = Hex(0x71717A), Foreground = Hex(0xFAFAFA), MutedForeground = Hex(0xA1A1AA), Primary = Hex(0xFAFAFA), PrimaryForeground = Hex(0x18181B), Destructive = Hex(0xF87171) };
-        }
-
-        private static Color Hex(int rgb) { return Color.FromArgb((rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255); }
-    }
-
-    private static class SetupPaint
-    {
-        public static System.Drawing.Drawing2D.GraphicsPath RoundedRect(RectangleF bounds, float radius)
-        {
-            System.Drawing.Drawing2D.GraphicsPath path = new System.Drawing.Drawing2D.GraphicsPath();
-            float diameter = Math.Min(radius * 2f, Math.Min(bounds.Width, bounds.Height));
-            if (diameter <= 1f) { path.AddRectangle(bounds); return path; }
-            path.AddArc(bounds.X, bounds.Y, diameter, diameter, 180, 90);
-            path.AddArc(bounds.Right - diameter, bounds.Y, diameter, diameter, 270, 90);
-            path.AddArc(bounds.Right - diameter, bounds.Bottom - diameter, diameter, diameter, 0, 90);
-            path.AddArc(bounds.X, bounds.Bottom - diameter, diameter, diameter, 90, 90);
-            path.CloseFigure();
-            return path;
-        }
-
-        public static Color Blend(Color from, Color to, float amount)
-        {
-            return Color.FromArgb(
-                (int)Math.Round(from.R + (to.R - from.R) * amount),
-                (int)Math.Round(from.G + (to.G - from.G) * amount),
-                (int)Math.Round(from.B + (to.B - from.B) * amount));
-        }
-
-        public static Color Outer(Control control)
-        {
-            return control.Parent != null ? control.Parent.BackColor : control.BackColor;
-        }
-
-        /// <summary>Every owner-drawn control fills its whole rectangle first, so stale pixels never show through.</summary>
-        public static void FillOuter(Graphics graphics, Control control)
-        {
-            using (SolidBrush brush = new SolidBrush(Outer(control)))
-                graphics.FillRectangle(brush, control.ClientRectangle);
-        }
-
-        public static void FocusRing(Graphics graphics, RectangleF bounds, float radius, Color color)
-        {
-            using (System.Drawing.Drawing2D.GraphicsPath ring = RoundedRect(RectangleF.Inflate(bounds, 1.5f, 1.5f), radius + 1.5f))
-            using (Pen pen = new Pen(color, 2f))
-                graphics.DrawPath(pen, ring);
-        }
-    }
-
-    private sealed class SetupHairline : Control, ISetupThemed
-    {
-        public SetupHairline()
-        {
-            Height = 1;
-            TabStop = false;
-            SetStyle(ControlStyles.Selectable, false);
-            Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top;
-            Margin = new Padding(0, 0, 0, 12);
-        }
-
-        public Color ApplyPalette(SetupPalette palette, Color inherited)
-        {
-            BackColor = palette.Border;
-            return palette.Border;
-        }
-    }
-
-    /// <summary>A single-column layout drawn as a rounded, bordered card. Children sit on the card color.</summary>
-    private sealed class SetupCard : TableLayoutPanel, ISetupThemed
-    {
-        private SetupPalette _palette;
-
-        public SetupCard()
-        {
-            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw | ControlStyles.UserPaint, true);
-            ColumnCount = 1;
-            ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            AutoSize = true;
-            AutoSizeMode = AutoSizeMode.GrowAndShrink;
-            GrowStyle = TableLayoutPanelGrowStyle.AddRows;
-            Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top;
-            Padding = new Padding(20, 18, 20, 4);
-            Margin = new Padding(0, 0, 0, 16);
-        }
-
-        public Color ApplyPalette(SetupPalette palette, Color inherited)
-        {
-            _palette = palette;
-            BackColor = palette.Card;
-            Invalidate();
-            return palette.Card;
-        }
-
-        protected override void OnPaintBackground(PaintEventArgs e)
-        {
-            SetupPaint.FillOuter(e.Graphics, this);
-            if (_palette == null) return;
-            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            using (System.Drawing.Drawing2D.GraphicsPath path = SetupPaint.RoundedRect(new RectangleF(0.5f, 0.5f, Width - 1.5f, Height - 1.5f), 10f))
-            using (SolidBrush fill = new SolidBrush(_palette.Card))
-            using (Pen border = new Pen(_palette.Border))
-            {
-                e.Graphics.FillPath(fill, path);
-                e.Graphics.DrawPath(border, path);
-            }
-        }
-    }
-
-    /// <summary>Hosts a borderless TextBox inside a rounded input frame with a focus ring.</summary>
-    private sealed class SetupField : Panel, ISetupThemed
-    {
-        private readonly TextBox _box;
-        private SetupPalette _palette;
-
-        public SetupField(TextBox box)
-        {
-            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw | ControlStyles.UserPaint, true);
-            _box = box;
-            box.BorderStyle = BorderStyle.None;
-            Controls.Add(box);
-            Height = box.Font.Height + 20;
-            Cursor = Cursors.IBeam;
-            box.GotFocus += delegate { Invalidate(); };
-            box.LostFocus += delegate { Invalidate(); };
-            box.EnabledChanged += delegate { UpdateBoxColors(); Invalidate(); };
-            Click += delegate { if (_box.CanFocus) _box.Focus(); };
-        }
-
-        public Color ApplyPalette(SetupPalette palette, Color inherited)
-        {
-            _palette = palette;
-            BackColor = inherited;
-            UpdateBoxColors();
-            Invalidate();
-            return FieldBackground;
-        }
-
-        private Color FieldBackground
-        {
-            get { return _palette == null ? SystemColors.Window : (_box.Enabled ? _palette.Card : _palette.Muted); }
-        }
-
-        private void UpdateBoxColors()
-        {
-            if (_palette == null) return;
-            _box.BackColor = FieldBackground;
-            _box.ForeColor = _palette.Foreground;
-        }
-
-        protected override void OnLayout(LayoutEventArgs levent)
-        {
-            base.OnLayout(levent);
-            _box.Width = Math.Max(1, Width - 20);
-            _box.Location = new Point(10, Math.Max(0, (Height - _box.Height) / 2));
-        }
-
-        protected override void OnPaintBackground(PaintEventArgs e)
-        {
-            SetupPaint.FillOuter(e.Graphics, this);
-            if (_palette == null) return;
-            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            RectangleF bounds = new RectangleF(2f, 2f, Width - 5f, Height - 5f);
-            bool focused = _box.Focused;
-            using (System.Drawing.Drawing2D.GraphicsPath path = SetupPaint.RoundedRect(bounds, 6f))
-            using (SolidBrush fill = new SolidBrush(FieldBackground))
-            using (Pen border = new Pen(focused ? _palette.Ring : _palette.Input))
-            {
-                e.Graphics.FillPath(fill, path);
-                e.Graphics.DrawPath(border, path);
-            }
-            if (focused)
-                SetupPaint.FocusRing(e.Graphics, bounds, 6f, SetupPaint.Blend(_palette.Ring, SetupPaint.Outer(this), 0.45f));
-        }
-    }
-
-    private sealed class SetupButton : Button, ISetupThemed
-    {
-        private readonly bool _primary;
-        private SetupPalette _palette;
-        private bool _hover;
-        private bool _pressed;
-
-        public SetupButton(string text, bool primary)
-        {
-            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
-            Text = text;
-            _primary = primary;
-            FlatStyle = FlatStyle.Flat;
-            FlatAppearance.BorderSize = 0;
-            UseVisualStyleBackColor = false;
-            AutoSize = true;
-            AutoSizeMode = AutoSizeMode.GrowAndShrink;
-        }
-
-        public override Size GetPreferredSize(Size proposedSize)
-        {
-            Size text = TextRenderer.MeasureText(Text, Font, Size.Empty, TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
-            return new Size(Math.Max(text.Width + 32, 88), Math.Max(text.Height + 16, 36));
-        }
-
-        public Color ApplyPalette(SetupPalette palette, Color inherited)
-        {
-            _palette = palette;
-            BackColor = inherited;
-            ForeColor = _primary ? palette.PrimaryForeground : palette.Foreground;
-            Invalidate();
-            return inherited;
-        }
-
-        protected override void OnMouseEnter(EventArgs e) { _hover = true; Invalidate(); base.OnMouseEnter(e); }
-        protected override void OnMouseLeave(EventArgs e) { _hover = false; _pressed = false; Invalidate(); base.OnMouseLeave(e); }
-        protected override void OnMouseDown(MouseEventArgs mevent) { if (mevent.Button == MouseButtons.Left) { _pressed = true; Invalidate(); } base.OnMouseDown(mevent); }
-        protected override void OnMouseUp(MouseEventArgs mevent) { _pressed = false; Invalidate(); base.OnMouseUp(mevent); }
-        protected override void OnGotFocus(EventArgs e) { Invalidate(); base.OnGotFocus(e); }
-        protected override void OnLostFocus(EventArgs e) { _pressed = false; Invalidate(); base.OnLostFocus(e); }
-        protected override void OnEnabledChanged(EventArgs e) { Invalidate(); base.OnEnabledChanged(e); }
-        protected override void OnTextChanged(EventArgs e) { base.OnTextChanged(e); Invalidate(); }
-
-        protected override void OnPaint(PaintEventArgs pevent)
-        {
-            Graphics graphics = pevent.Graphics;
-            SetupPaint.FillOuter(graphics, this);
-            SetupPalette palette = _palette ?? SetupPalette.Light();
-            Color outer = SetupPaint.Outer(this);
-            Color fill;
-            Color text;
-            Color border = Color.Empty;
-            if (_primary)
-            {
-                fill = _pressed ? SetupPaint.Blend(palette.Primary, outer, 0.25f) : _hover ? SetupPaint.Blend(palette.Primary, outer, 0.12f) : palette.Primary;
-                text = palette.PrimaryForeground;
-                if (palette.IsHighContrast) border = palette.Border;
-            }
-            else
-            {
-                fill = _pressed ? palette.Border : _hover ? palette.Muted : palette.Card;
-                text = palette.Foreground;
-                border = palette.Input;
-            }
-            if (!Enabled)
-            {
-                fill = SetupPaint.Blend(fill, outer, 0.5f);
-                text = SetupPaint.Blend(text, outer, 0.5f);
-                if (border != Color.Empty) border = SetupPaint.Blend(border, outer, 0.5f);
-            }
-            graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            RectangleF bounds = new RectangleF(2f, 2f, Width - 5f, Height - 5f);
-            using (System.Drawing.Drawing2D.GraphicsPath path = SetupPaint.RoundedRect(bounds, 6f))
-            using (SolidBrush brush = new SolidBrush(fill))
-            {
-                graphics.FillPath(brush, path);
-                if (border != Color.Empty)
-                    using (Pen pen = new Pen(border)) graphics.DrawPath(pen, path);
-            }
-            if (Focused && ShowFocusCues)
-                SetupPaint.FocusRing(graphics, bounds, 6f, palette.Ring);
-            TextRenderer.DrawText(graphics, Text, Font, Rectangle.Round(bounds), text,
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
-        }
-    }
-
-    /// <summary>A CheckBox drawn as a switch; keyboard, accessibility, and Checked behavior are unchanged.</summary>
-    private sealed class SetupSwitch : CheckBox, ISetupThemed
-    {
-        private SetupPalette _palette;
-        private bool _hover;
-
-        public SetupSwitch()
-        {
-            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
-            AutoSize = false;
-            Text = String.Empty;
-            Size = new Size(44, 28);
-        }
-
-        public Color ApplyPalette(SetupPalette palette, Color inherited)
-        {
-            _palette = palette;
-            BackColor = inherited;
-            Invalidate();
-            return inherited;
-        }
-
-        protected override void OnCheckedChanged(EventArgs e) { Invalidate(); base.OnCheckedChanged(e); }
-        protected override void OnMouseEnter(EventArgs eventargs) { _hover = true; Invalidate(); base.OnMouseEnter(eventargs); }
-        protected override void OnMouseLeave(EventArgs eventargs) { _hover = false; Invalidate(); base.OnMouseLeave(eventargs); }
-        protected override void OnGotFocus(EventArgs e) { Invalidate(); base.OnGotFocus(e); }
-        protected override void OnLostFocus(EventArgs e) { Invalidate(); base.OnLostFocus(e); }
-        protected override void OnEnabledChanged(EventArgs e) { Invalidate(); base.OnEnabledChanged(e); }
-
-        protected override void OnPaint(PaintEventArgs pevent)
-        {
-            Graphics graphics = pevent.Graphics;
-            SetupPaint.FillOuter(graphics, this);
-            SetupPalette palette = _palette ?? SetupPalette.Light();
-            Color outer = SetupPaint.Outer(this);
-            float trackWidth = Math.Min(36f, Width - 6f);
-            float trackHeight = trackWidth * 20f / 36f;
-            RectangleF track = new RectangleF((Width - trackWidth) / 2f, (Height - trackHeight) / 2f, trackWidth, trackHeight);
-            Color trackColor = Checked ? palette.Primary : (_hover ? SetupPaint.Blend(palette.Input, palette.Ring, 0.35f) : palette.Input);
-            Color knobColor = Checked ? palette.PrimaryForeground : palette.Card;
-            if (!Enabled)
-            {
-                trackColor = SetupPaint.Blend(trackColor, outer, 0.5f);
-                knobColor = SetupPaint.Blend(knobColor, outer, 0.5f);
-            }
-            graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            using (System.Drawing.Drawing2D.GraphicsPath path = SetupPaint.RoundedRect(track, trackHeight / 2f))
-            using (SolidBrush brush = new SolidBrush(trackColor))
-            {
-                graphics.FillPath(brush, path);
-                if (palette.IsHighContrast)
-                    using (Pen pen = new Pen(palette.Border)) graphics.DrawPath(pen, path);
-            }
-            float knob = trackHeight - 4f;
-            float knobX = Checked ? track.Right - 2f - knob : track.X + 2f;
-            using (SolidBrush brush = new SolidBrush(knobColor))
-                graphics.FillEllipse(brush, knobX, track.Y + 2f, knob, knob);
-            if (Focused && ShowFocusCues)
-                SetupPaint.FocusRing(graphics, track, trackHeight / 2f, palette.Ring);
-        }
-    }
-
-    /// <summary>A neutral pill label, matching the receiver's pairing badge.</summary>
-    private sealed class SetupBadge : Label, ISetupThemed
-    {
-        private SetupPalette _palette;
-
-        public SetupBadge()
-        {
-            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
-            AutoSize = true;
-            UseMnemonic = false;
-        }
-
-        public override Size GetPreferredSize(Size proposedSize)
-        {
-            Size text = TextRenderer.MeasureText(Text, Font, Size.Empty, TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
-            return new Size(text.Width + 22, text.Height + 10);
-        }
-
-        public Color ApplyPalette(SetupPalette palette, Color inherited)
-        {
-            _palette = palette;
-            BackColor = inherited;
-            Invalidate();
-            return inherited;
-        }
-
-        protected override void OnPaint(PaintEventArgs e)
-        {
-            SetupPaint.FillOuter(e.Graphics, this);
-            SetupPalette palette = _palette ?? SetupPalette.Light();
-            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            RectangleF bounds = new RectangleF(0.5f, 0.5f, Width - 1.5f, Height - 1.5f);
-            using (System.Drawing.Drawing2D.GraphicsPath path = SetupPaint.RoundedRect(bounds, bounds.Height / 2f))
-            using (SolidBrush fill = new SolidBrush(palette.Muted))
-            using (Pen border = new Pen(palette.Border))
-            {
-                e.Graphics.FillPath(fill, path);
-                e.Graphics.DrawPath(border, path);
-            }
-            TextRenderer.DrawText(e.Graphics, Text, Font, ClientRectangle, palette.Foreground,
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
-        }
-    }
-
-    private sealed class SetupProgress : Control, ISetupThemed
-    {
-        private SetupPalette _palette;
-        private int _value;
-
-        public SetupProgress()
-        {
-            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw | ControlStyles.UserPaint, true);
-            TabStop = false;
-            AccessibleRole = AccessibleRole.ProgressBar;
-        }
-
-        public int Value
-        {
-            get { return _value; }
-            set
-            {
-                _value = Math.Max(0, Math.Min(100, value));
-                AccessibleDescription = _value.ToString(System.Globalization.CultureInfo.InvariantCulture) + "%";
-                Invalidate();
-            }
-        }
-
-        public Color ApplyPalette(SetupPalette palette, Color inherited)
-        {
-            _palette = palette;
-            BackColor = inherited;
-            Invalidate();
-            return inherited;
-        }
-
-        protected override void OnPaint(PaintEventArgs e)
-        {
-            SetupPaint.FillOuter(e.Graphics, this);
-            if (_palette == null) return;
-            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            RectangleF track = new RectangleF(0f, 0f, Width - 1f, Height - 1f);
-            using (System.Drawing.Drawing2D.GraphicsPath path = SetupPaint.RoundedRect(track, track.Height / 2f))
-            using (SolidBrush brush = new SolidBrush(_palette.Muted))
-                e.Graphics.FillPath(brush, path);
-            float fillWidth = track.Width * _value / 100f;
-            if (fillWidth <= 0f) return;
-            RectangleF fill = new RectangleF(track.X, track.Y, Math.Max(track.Height, fillWidth), track.Height);
-            using (System.Drawing.Drawing2D.GraphicsPath path = SetupPaint.RoundedRect(fill, track.Height / 2f))
-            using (SolidBrush brush = new SolidBrush(_palette.Primary))
-                e.Graphics.FillPath(brush, path);
-        }
-    }
 }

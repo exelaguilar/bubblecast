@@ -1,0 +1,76 @@
+name: Windows app
+
+# Builds Bubblecast for Windows on GitHub's Windows runners with the .NET Framework C# compiler
+# that ships with Windows:
+# - every push and pull request: build and pure-logic checks, with the executables kept as an artifact
+# - every published release: Setup, the portable app, and SHA256SUMS.txt are attached to that release
+# - manual run with a release tag: builds the branch you run it on and attaches to that existing release
+#   (use it only when the branch's app source and VERSION match the release)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing release tag to attach this branch's Windows build to (for example v1.0.0). Leave empty to only build."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Match VERSION to the release tag
+        if: env.RELEASE_TAG != ''
+        run: |
+          $expected = $env:RELEASE_TAG.TrimStart('v')
+          $actual = (Get-Content VERSION -Raw).Trim()
+          if ($expected -ne $actual) { throw "VERSION is $actual but the release tag is $env:RELEASE_TAG; refusing to attach a mismatched build." }
+
+      - name: Build and run checks
+        run: cmd /c windows\build.cmd test
+
+      - name: Build release executables
+        run: cmd /c windows\build.cmd release
+
+      - name: Name release assets
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item "windows\release\Bubblecast Setup.exe" "dist\Bubblecast-Setup-$version.exe"
+          Copy-Item "windows\release\Bubblecast.exe" "dist\Bubblecast-$version-portable.exe"
+          $lines = Get-ChildItem dist -Filter *.exe | Sort-Object Name -Descending | ForEach-Object {
+            "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash, $_.Name
+          }
+          Set-Content -Path dist\SHA256SUMS.txt -Value $lines -Encoding ascii
+          Get-Content dist\SHA256SUMS.txt
+          Get-Content windows\release\RELEASE-NOTES.md
+
+      - name: Keep the executables as a workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: Bubblecast-Windows
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Attach to the release
+        if: env.RELEASE_TAG != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload $env:RELEASE_TAG (Get-ChildItem dist).FullName --clobber --repo $env:GITHUB_REPOSITORY

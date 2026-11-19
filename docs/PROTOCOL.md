@@ -1,6 +1,6 @@
 # Bubblecast relay protocol (v1 and v2)
 
-This document defines the request format between Bubblecast for Mac and Bubblecast for Windows. The Mac sends v2; Windows also accepts the simpler v1 format. HTTP v1 remains available on TCP 8765. v2 requests may use the same HTTP endpoint or pinned TLS on TCP 8766. HMAC-SHA256 authenticates and protects request integrity; only TLS hides notification contents on the LAN.
+This document defines the request format between Bubblecast for Mac and Bubblecast for Windows. Both sides use v2. The v1 format described below is kept only as a reference vector for the shared HMAC; since 1.1.0 Windows rejects requests without `X-Relay-Version: 2`. HTTP v1 remains available on TCP 8765. v2 requests may use the same HTTP endpoint or pinned TLS on TCP 8766. HMAC-SHA256 authenticates and protects request integrity; only TLS hides notification contents on the LAN.
 
 ## Endpoints and responses
 
@@ -120,4 +120,12 @@ Windows generates a self-signed TLS 1.2 certificate in the current user's certif
 
 ## Compatibility boundary
 
-Bubblecast for Windows accepts both v1 and v2 requests on port 8765, and v2 on port 8766 when TLS is enabled. Bubblecast for Mac always sends v2. When updating both sides, update Windows first.
+Bubblecast for Windows 1.1.0 and later accepts only v2 requests, on port 8765 (HTTP) and on port 8766 (TLS) when its certificate is available. Bubblecast for Mac always sends v2.
+
+## Discovery
+
+Windows announces the receiver with DNS-SD over multicast DNS as `<PC name>._bubblecast._tcp.local`, with an SRV record for port 8765, TXT keys `v=2` and `tls=8766` (empty when TLS is unavailable), and address records for `<PC name>.local`. It announces on the primary LAN address, or on the configured listen address. The Mac browses for `_bubblecast._tcp` and addresses a chosen PC as `<PC name>.local`. Discovery only finds the PC; every request is still signed with the pairing token.
+
+## Pinning on first use
+
+With TLS on and no fingerprint saved, the Mac sends one signed `/health` request over TLS that accepts the certificate Windows presents, and fills in that certificate's SHA-256 fingerprint for the user to compare with the fingerprint Windows shows. The fingerprint is pinned when the user saves it; after that the Mac rejects any other certificate.

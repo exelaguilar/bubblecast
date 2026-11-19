@@ -9,7 +9,6 @@ enum RelayStatusLevel {
 
 enum RelayPreferences {
     static let windowsAddress = "windowsAddress"
-    static let pairingToken = "pairingToken"
     static let includeSenderNames = "includeSenderNames"
     static let includeMessagePreviews = "includeMessagePreviews"
     static let suppressOldMessages = "suppressOldMessages"
@@ -40,16 +39,8 @@ struct RelaySettings: Equatable {
     let tlsCertificateFingerprint: String
 
     static func load(from defaults: UserDefaults = .standard, tokenStore: PairingTokenStore = KeychainTokenStore()) -> RelaySettings {
-        let legacyToken = defaults.string(forKey: RelayPreferences.pairingToken) ?? ""
-        var pairingToken = legacyToken
-        do {
-            if let keychainToken = try tokenStore.readToken() {
-                pairingToken = keychainToken
-            } else if !legacyToken.isEmpty { try tokenStore.writeToken(legacyToken) }
-        } catch {
-            // Keep the existing token usable if Keychain is temporarily unavailable.
-            pairingToken = legacyToken
-        }
+        // The token lives only in the Keychain. An unreadable item loads as empty; saving writes a fresh one.
+        let pairingToken = ((try? tokenStore.readToken()) ?? nil) ?? ""
         return RelaySettings(
             windowsAddress: defaults.string(forKey: RelayPreferences.windowsAddress) ?? "",
             pairingToken: pairingToken,
@@ -59,7 +50,7 @@ struct RelaySettings: Equatable {
             maximumMessageAgeMinutes: max(1, min(1440, defaults.object(forKey: RelayPreferences.maximumMessageAgeMinutes) as? Int ?? 10)),
             senderNameOverrides: defaults.string(forKey: RelayPreferences.senderNameOverrides) ?? "",
             notifyForReactions: defaults.object(forKey: RelayPreferences.notifyForReactions) as? Bool ?? false,
-            useTLS: defaults.object(forKey: RelayPreferences.useTLS) as? Bool ?? false,
+            useTLS: defaults.object(forKey: RelayPreferences.useTLS) as? Bool ?? true,
             tlsCertificateFingerprint: defaults.string(forKey: RelayPreferences.tlsCertificateFingerprint) ?? ""
         )
     }
@@ -75,10 +66,6 @@ struct RelaySettings: Equatable {
         defaults.set(notifyForReactions, forKey: RelayPreferences.notifyForReactions)
         defaults.set(useTLS, forKey: RelayPreferences.useTLS)
         defaults.set(tlsCertificateFingerprint, forKey: RelayPreferences.tlsCertificateFingerprint)
-    }
-
-    static func retireLegacyToken(from defaults: UserDefaults = .standard) {
-        defaults.removeObject(forKey: RelayPreferences.pairingToken)
     }
 }
 
