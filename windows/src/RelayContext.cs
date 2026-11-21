@@ -57,6 +57,7 @@ namespace Bubblecast
         private Label _statusLabel;
         private Label _metricsLabel;
         private Label _pairingLabel;
+        private Label _sharedStatusLabel;
         private bool _quietHoursEnabled;
         private TimeSpan _quietHoursStart = new TimeSpan(22, 0, 0);
         private TimeSpan _quietHoursEnd = new TimeSpan(7, 0, 0);
@@ -115,6 +116,7 @@ namespace Bubblecast
             _verifier = new RequestVerifier(delegate { lock (_tokenLock) return _token; });
             InitializeTlsCertificate();
             LoadSettings();
+            LoadSharedSettings();
 
             // Keep an existing sign-in shortcut but retarget it to this updated executable name.
             if (StartupShortcut.Exists())
@@ -336,6 +338,8 @@ namespace Bubblecast
             }
             if (_metricsLabel != null && !_metricsLabel.IsDisposed)
                 _metricsLabel.Text = GetMetricsText();
+            if (_sharedStatusLabel != null && !_sharedStatusLabel.IsDisposed)
+                _sharedStatusLabel.Text = GetSharedSettingsStatusText();
             if (_pairingLabel != null && !_pairingLabel.IsDisposed)
             {
                 _pairingLabel.Text = GetPairingStatusText();
@@ -423,6 +427,7 @@ namespace Bubblecast
             return String.Join(Environment.NewLine, new string[] {
                 "Bubblecast Windows " + version,
                 "Listener: " + (_listener != null ? "listening" : "not currently listening"),
+                "Mac settings: " + (CurrentSharedSettings() == null ? "not shared yet" : "shared"),
                 "Notifications received: " + Interlocked.Read(ref _notificationsReceived).ToString(CultureInfo.InvariantCulture),
                 "Health checks: " + Interlocked.Read(ref _healthChecksReceived).ToString(CultureInfo.InvariantCulture),
                 "Rejected bad signatures: " + Interlocked.Read(ref _rejectionCounts[(int)RequestRejectionReason.BadSignature - 1]).ToString(CultureInfo.InvariantCulture),

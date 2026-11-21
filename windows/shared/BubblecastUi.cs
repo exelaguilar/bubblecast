@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
@@ -314,6 +315,7 @@ namespace Bubblecast
         private readonly TextBox _box;
         private int _lines;
         private RelayPalette _palette;
+        private bool _dimmed;
 
         public FieldHost(TextBox box, int lines)
         {
@@ -332,10 +334,30 @@ namespace Bubblecast
             box.LostFocus += delegate { Invalidate(); };
             box.EnabledChanged += delegate { UpdateBoxColors(); Invalidate(); };
             box.FontChanged += delegate { PerformLayout(); };
-            Click += delegate { if (_box.CanFocus) _box.Focus(); };
+            Click += delegate { if (_box.CanFocus && !_dimmed) _box.Focus(); };
         }
 
         public int PreferredWidth { get; set; }
+
+        /// <summary>
+        /// Shows the field as unavailable without disabling the TextBox: Windows paints a disabled edit
+        /// control in fixed system colors (a white box in dark mode), so a dimmed field is read-only,
+        /// out of the tab order, and drawn in muted colors instead.
+        /// </summary>
+        public bool Dimmed
+        {
+            get { return _dimmed; }
+            set
+            {
+                if (_dimmed == value) return;
+                _dimmed = value;
+                _box.ReadOnly = value;
+                _box.TabStop = !value;
+                Cursor = value ? Cursors.Default : Cursors.IBeam;
+                UpdateBoxColors();
+                Invalidate();
+            }
+        }
 
         /// <summary>Visible text lines; changing it resizes the field and re-lays out its parent.</summary>
         public int VisibleLines
@@ -395,7 +417,7 @@ namespace Bubblecast
         {
             if (_palette == null) return;
             _box.BackColor = FieldBackground;
-            _box.ForeColor = _palette.Foreground;
+            _box.ForeColor = _dimmed ? _palette.MutedForeground : _palette.Foreground;
         }
 
         protected override void OnPaintBackground(PaintEventArgs e)
@@ -409,7 +431,7 @@ namespace Bubblecast
             bool focused = _box.Focused;
             using (GraphicsPath path = UiPaint.RoundedRect(bounds, radius))
             using (SolidBrush fill = new SolidBrush(FieldBackground))
-            using (Pen border = new Pen(focused ? _palette.Ring : _palette.Input))
+            using (Pen border = new Pen(focused ? _palette.Ring : _dimmed ? _palette.Border : _palette.Input))
             {
                 e.Graphics.FillPath(fill, path);
                 e.Graphics.DrawPath(border, path);
@@ -574,6 +596,175 @@ namespace Bubblecast
                 graphics.FillEllipse(brush, knobX, track.Y + gap, knob, knob);
             if (Focused && ShowFocusCues)
                 UiPaint.DrawFocusRing(graphics, track, trackHeight / 2f, palette.Ring);
+        }
+    }
+
+    /// <summary>
+    /// A segmented control (shadcn "tabs" list): a muted track holding one button per page, with the
+    /// selected one raised. Each segment is a real Button, so keyboard and screen readers work as usual;
+    /// Left and Right move between segments.
+    /// </summary>
+    internal sealed class SegmentedControl : TableLayoutPanel, IThemed
+    {
+        private readonly List<SegmentButton> _segments = new List<SegmentButton>();
+        private RelayPalette _palette;
+        private int _selectedIndex;
+
+        public event EventHandler SelectedIndexChanged;
+
+        public SegmentedControl(Font font, params string[] labels)
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw | ControlStyles.UserPaint, true);
+            AutoSize = true;
+            AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            RowCount = 1;
+            ColumnCount = labels.Length;
+            Padding = new Padding(3);
+            Margin = Padding.Empty;
+            RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            for (int index = 0; index < labels.Length; index++)
+            {
+                ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+                SegmentButton segment = new SegmentButton(this, index) { Text = labels[index], Font = font, Margin = Padding.Empty };
+                segment.Selected = index == 0;
+                _segments.Add(segment);
+                Controls.Add(segment, index, 0);
+            }
+        }
+
+        public int SelectedIndex
+        {
+            get { return _selectedIndex; }
+            set
+            {
+                if (value < 0 || value >= _segments.Count || value == _selectedIndex) return;
+                _selectedIndex = value;
+                for (int index = 0; index < _segments.Count; index++) _segments[index].Selected = index == value;
+                if (SelectedIndexChanged != null) SelectedIndexChanged(this, EventArgs.Empty);
+            }
+        }
+
+        public Color ApplyPalette(RelayPalette palette, Color inherited)
+        {
+            _palette = palette;
+            BackColor = palette.Muted;
+            Invalidate();
+            return palette.Muted;
+        }
+
+        protected override void OnPaintBackground(PaintEventArgs e)
+        {
+            UiPaint.FillOuter(e.Graphics, this);
+            if (_palette == null) return;
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            using (GraphicsPath path = UiPaint.RoundedRect(new RectangleF(0, 0, Width - 1, Height - 1), 8f * UiPaint.Scale))
+            using (SolidBrush fill = new SolidBrush(_palette.Muted))
+            {
+                e.Graphics.FillPath(fill, path);
+                if (_palette.IsHighContrast)
+                    using (Pen pen = new Pen(_palette.Border)) e.Graphics.DrawPath(pen, path);
+            }
+        }
+
+        private void MoveSelection(int from, int delta)
+        {
+            int target = Math.Max(0, Math.Min(_segments.Count - 1, from + delta));
+            SelectedIndex = target;
+            _segments[target].Focus();
+        }
+
+        private sealed class SegmentButton : Button, IThemed
+        {
+            private readonly SegmentedControl _owner;
+            private readonly int _index;
+            private RelayPalette _palette;
+            private bool _selected;
+            private bool _hover;
+
+            public SegmentButton(SegmentedControl owner, int index)
+            {
+                SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+                _owner = owner;
+                _index = index;
+                FlatStyle = FlatStyle.Flat;
+                FlatAppearance.BorderSize = 0;
+                UseVisualStyleBackColor = false;
+                AutoSize = true;
+                AutoSizeMode = AutoSizeMode.GrowAndShrink;
+                AccessibleRole = AccessibleRole.PageTab;
+            }
+
+            public bool Selected
+            {
+                get { return _selected; }
+                set
+                {
+                    _selected = value;
+                    AccessibleDescription = value ? "Selected" : null;
+                    Invalidate();
+                }
+            }
+
+            public override Size GetPreferredSize(Size proposedSize)
+            {
+                Size text = TextRenderer.MeasureText(Text, Font, Size.Empty, TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
+                return new Size(text.Width + UiPaint.Px(32), Math.Max(text.Height + UiPaint.Px(10), UiPaint.Px(28)));
+            }
+
+            public Color ApplyPalette(RelayPalette palette, Color inherited)
+            {
+                _palette = palette;
+                BackColor = inherited;
+                Invalidate();
+                return inherited;
+            }
+
+            protected override void OnClick(EventArgs e) { _owner.SelectedIndex = _index; base.OnClick(e); }
+            protected override void OnMouseEnter(EventArgs e) { _hover = true; Invalidate(); base.OnMouseEnter(e); }
+            protected override void OnMouseLeave(EventArgs e) { _hover = false; Invalidate(); base.OnMouseLeave(e); }
+            protected override void OnGotFocus(EventArgs e) { Invalidate(); base.OnGotFocus(e); }
+            protected override void OnLostFocus(EventArgs e) { Invalidate(); base.OnLostFocus(e); }
+
+            protected override bool IsInputKey(Keys keyData)
+            {
+                return keyData == Keys.Left || keyData == Keys.Right || base.IsInputKey(keyData);
+            }
+
+            protected override void OnKeyDown(KeyEventArgs e)
+            {
+                if (e.KeyCode == Keys.Left || e.KeyCode == Keys.Right)
+                {
+                    _owner.MoveSelection(_index, e.KeyCode == Keys.Left ? -1 : 1);
+                    e.Handled = true;
+                    return;
+                }
+                base.OnKeyDown(e);
+            }
+
+            protected override void OnPaint(PaintEventArgs pevent)
+            {
+                Graphics graphics = pevent.Graphics;
+                UiPaint.FillOuter(graphics, this);
+                RelayPalette palette = _palette ?? RelayPalette.Light();
+                graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                RectangleF bounds = new RectangleF(0.5f, 0.5f, Width - 1.5f, Height - 1.5f);
+                float radius = 6f * UiPaint.Scale;
+                if (_selected)
+                {
+                    using (GraphicsPath path = UiPaint.RoundedRect(bounds, radius))
+                    using (SolidBrush brush = new SolidBrush(palette.Card))
+                    using (Pen pen = new Pen(palette.Border))
+                    {
+                        graphics.FillPath(brush, path);
+                        graphics.DrawPath(pen, path);
+                    }
+                }
+                if (Focused && ShowFocusCues)
+                    UiPaint.DrawFocusRing(graphics, RectangleF.Inflate(bounds, -1.5f * UiPaint.Scale, -1.5f * UiPaint.Scale), radius, palette.Ring);
+                Color text = _selected || _hover ? palette.Foreground : palette.MutedForeground;
+                TextRenderer.DrawText(graphics, Text, Font, Rectangle.Round(bounds), text,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
+            }
         }
     }
 

@@ -88,6 +88,8 @@ internal static class BubblecastSetup
             }
             if (File.Exists(appPath))
             {
+                ClearReadOnly(appPath);
+                ClearReadOnly(backupPath);
                 if (File.Exists(backupPath)) File.Delete(backupPath);
                 File.Replace(stagedAppPath, appPath, backupPath);
                 if (File.Exists(backupPath)) File.Delete(backupPath);
@@ -102,8 +104,13 @@ internal static class BubblecastSetup
 
         reportProgress("Creating shortcuts and registration…", 85);
         string uninstallPath = Path.Combine(destination, "Uninstall Bubblecast.exe");
+        // File.Copy keeps the source's attributes, so a read-only downloaded Setup would leave a read-only
+        // uninstaller that the next update can't overwrite. Clear the flag on both sides of the copy.
+        ClearReadOnly(uninstallPath);
         File.Copy(Application.ExecutablePath, uninstallPath, true);
+        ClearReadOnly(uninstallPath);
         string iconPath = Path.Combine(destination, "Bubblecast.ico");
+        ClearReadOnly(iconPath);
         using (Stream icon = Assembly.GetExecutingAssembly().GetManifestResourceStream("Bubblecast.AppIcon.ico"))
         {
             if (icon != null)
@@ -142,6 +149,15 @@ internal static class BubblecastSetup
         string launchArguments = "--set-startup=" + (startAtSignIn ? "on" : "off") + (launchAfterInstall ? " --show-settings" : String.Empty);
         LaunchAsInteractiveUser(appPath, launchArguments);
         reportProgress("Installation complete.", 100);
+    }
+
+    /// <summary>Removes the read-only attribute, if the file exists and has it.</summary>
+    private static void ClearReadOnly(string path)
+    {
+        if (!File.Exists(path)) return;
+        FileAttributes attributes = File.GetAttributes(path);
+        if ((attributes & FileAttributes.ReadOnly) != 0)
+            File.SetAttributes(path, attributes & ~FileAttributes.ReadOnly);
     }
 
     private static void DeleteShortcut(string path)
@@ -260,7 +276,7 @@ internal static class BubblecastSetup
             if (String.Equals(file, Application.ExecutablePath, StringComparison.OrdinalIgnoreCase))
                 MoveFileEx(file, null, MoveFileDelayUntilReboot);
             else
-                try { File.Delete(file); } catch { MoveFileEx(file, null, MoveFileDelayUntilReboot); }
+                try { ClearReadOnly(file); File.Delete(file); } catch { MoveFileEx(file, null, MoveFileDelayUntilReboot); }
         }
         try { Directory.Delete(installDirectory, false); } catch { }
         MessageBox.Show("Bubblecast has been removed. Windows will clear the running uninstaller file the next time the PC restarts.", AppName + " Uninstall", MessageBoxButtons.OK, MessageBoxIcon.Information);

@@ -17,7 +17,7 @@ When updating, Setup asks the running app to close, shows progress, stages the n
 
 ## Settings
 
-Open **Bubblecast** from the Start menu, the desktop, or by double-clicking the tray icon. The window follows the Windows light/dark theme and opens with everything the Mac needs at the top.
+Open **Bubblecast** from the Start menu, the desktop, or by double-clicking the tray icon. The window follows the Windows light/dark theme and opens with everything the Mac needs at the top. The **This PC | Mac** switch in the header moves between this PC's settings and the Mac's notification settings.
 
 **Pairing**
 
@@ -44,6 +44,13 @@ Test notifications from the Mac always appear, even during quiet hours or for mu
 - **Only accept requests from the paired Mac IP**: accepts requests only from the last address that sent a valid signed request. If the Mac's address changes, turn this off, let the Mac connect, then turn it back on.
 - **Rotate pairing token**: replaces the token immediately; notifications stop until the Mac has the new token.
 - **Diagnostics**: notification and health-check counts, rejections by reason (bad signature, clock skew, replay, malformed, oversize, address not allowed), and the last authenticated clock skew. **Copy privacy-safe diagnostics** excludes the token, addresses, sender names, and message text.
+
+**Mac** page (the Mac's notification settings, shared with the Mac)
+
+- **What alerts show**: sender contact name, message previews, and associated-message (reaction) rows. The Mac applies these before anything is sent.
+- **When to stay quiet**: skip messages already read, stay quiet for a few minutes in a conversation you're active in, and ignore old or iCloud-synced messages older than a set age.
+- Changes save with **Save settings** and reach the Mac at its next check-in, within about a minute. Changes made on the Mac show up here right away. If both sides change, the most recent save wins; if the Mac changes something while you have unsaved edits here, your edits stay on screen and saving replaces the Mac's change.
+- The page stays read-only, with a waiting note, until Bubblecast 1.2 or later on the Mac checks in. Stored in `HKCU\Software\Bubblecast\MacSettings`.
 
 The footer shows the live receiver status and the header shows the pairing state ("Paired · Mac seen 1 min ago"). The tray tooltip shows when the Mac was last seen. Clicking a notification opens Settings.
 

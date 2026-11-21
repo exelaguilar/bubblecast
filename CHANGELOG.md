@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.2.0 — November 2026
+
+### New
+
+- **Skip messages you've already read.** Just before sending, the Mac checks whether the message is already marked read (on the Mac, or on your iPhone through iCloud) and drops it. This mostly catches messages that waited while Windows was unreachable. On by default.
+- **Stay quiet while you're active in a chat.** No alert for a conversation you sent or read a message in during the last few minutes (2 by default, up to 60), on any of your devices. On by default.
+- **Change the Mac's notification settings from Windows.** Settings on Windows has a new **Mac** page with the Mac's notification choices: sender names, previews, reaction rows, the old-message filter, and the two options above. They stay editable on the Mac too; the most recent change wins and reaches the other side within about a minute. Connection settings (address, token, TLS) stay on the Mac.
+
+### Fixed
+
+- Setup could fail with "Access is denied" when updating if the previous Setup was read-only when downloaded; it now clears the read-only flag on the files it replaces or removes.
+
+### Compatibility
+
+- Settings sharing needs 1.2 on both sides. A 1.2 Mac keeps working with a 1.1 PC (settings just stay on the Mac), and a 1.2 PC keeps working with a 1.1 Mac (its **Mac** page waits for the Mac to update).
+- Protocol: a new signed `POST /settings` request, and signed `X-Relay-Settings` response headers. Notification requests are unchanged.
+
+### Under the hood
+
+- Checks: 51 on macOS, 61 on Windows.
+
 ## 1.1.0 — November 2026
 
 ### New

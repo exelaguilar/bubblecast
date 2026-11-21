@@ -85,6 +85,39 @@ internal static class RelayChecks
               "verifier rejects an oversized preview");
     }
 
+    private static void SharedSettingsChecks(string token)
+    {
+        const string text = "rev=1700000000000;names=1;previews=0;old=1;age=10;reactions=0;read=1;active=1;activemin=2";
+        const string nonce = "123e4567-e89b-12d3-a456-426614174002";
+        SharedSettings parsed;
+        Check(SharedSettings.TryParse(text, out parsed) && parsed.Revision == 1700000000000 && !parsed.IncludeMessagePreviews && parsed.ActiveMinutes == 2 && parsed.Encode() == text,
+              "shared settings round-trip in the documented order");
+        Check(SharedSettings.TryParse("rev=5;future=9", out parsed) && parsed.Revision == 5 && parsed.SameValues(new SharedSettings()),
+              "unknown shared-settings keys are ignored and missing keys use defaults");
+        Check(!SharedSettings.TryParse("names=1", out parsed) && !SharedSettings.TryParse("rev=x", out parsed) && !SharedSettings.TryParse("rev=1;age", out parsed) && !SharedSettings.TryParse("rev=-1", out parsed),
+              "shared settings without a revision or with malformed pairs are rejected");
+        Check(SharedSettings.TryParse("rev=1;age=99999;activemin=0", out parsed) && parsed.MaximumMessageAgeMinutes == 1440 && parsed.ActiveMinutes == 1,
+              "shared settings clamp out-of-range minutes");
+        StringBuilder oversized = new StringBuilder("rev=1;");
+        for (int i = 0; i < 200; i++) oversized.Append("x=1;");
+        Check(!SharedSettings.TryParse(oversized.ToString(), out parsed), "oversized shared settings are rejected");
+        Check(SharedSettings.ResponseSignature(token, nonce, text) == "467902cb72f63cb24a7df57588fbd9c29a3b7626b3aed8836c51c2f427ef550b",
+              "settings response signature matches the protocol vector");
+        Check(RelayProtocolV2.Signature(token, RelayProtocolV2.Canonical("POST", "/settings", "1700000000", nonce, "settings", "", "", text)) == "284b277e830115a39d9c89a696468820655071f5ec5ae3323dccd14ef9354ca9",
+              "settings request signature matches the protocol vector");
+
+        TestClock clock = new TestClock();
+        RequestVerifier verifier = new RequestVerifier(delegate { return token; }, delegate { return clock.Now; });
+        long now = UnixSeconds(clock.Now);
+        Check(verifier.Verify("POST", "/settings", Signed(token, "POST", "/settings", "settings", "", now, Guid.NewGuid().ToString(), "", text), "", text).Accepted,
+              "verifier accepts signed settings on the settings endpoint");
+        Check(verifier.Verify("POST", "/settings", Signed(token, "POST", "/settings", "settings", "", now, Guid.NewGuid().ToString(), "", text), "", text.Replace("read=1", "read=0")).Rejection == RequestRejectionReason.BadSignature,
+              "verifier rejects settings changed in transit");
+        Check(verifier.Verify("POST", "/notify", Signed(token, "POST", "/notify", "settings", "", now, Guid.NewGuid().ToString(), "", text), "", text).Rejection == RequestRejectionReason.Malformed &&
+              verifier.Verify("POST", "/settings", Signed(token, "POST", "/settings", "test", "", now, Guid.NewGuid().ToString(), "", ""), "", "").Rejection == RequestRejectionReason.Malformed,
+              "settings kind and settings endpoint only go together");
+    }
+
     private static int Main()
     {
         Check(TokenValidation.IsValid(new string('a', 64)), "64 lowercase hex characters accepted");
@@ -153,6 +186,7 @@ internal static class RelayChecks
         Check(NetworkAddresses.IsUsableListenAddress("", localAddresses) && NetworkAddresses.IsUsableListenAddress(" 192.0.2.10 ", localAddresses) &&
               !NetworkAddresses.IsUsableListenAddress("198.51.100.1", localAddresses) && !NetworkAddresses.IsUsableListenAddress("not-an-ip", localAddresses),
               "the listen address must be blank or one of this PC's IPv4 addresses");
+        SharedSettingsChecks(token);
         Console.WriteLine("PASS: " + _checks + " Windows pure-logic checks");
         return 0;
     }

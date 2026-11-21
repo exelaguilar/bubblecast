@@ -235,7 +235,7 @@ struct RelayView: View {
     }
 
     private var notificationsCard: some View {
-        SectionCard("Notifications", subtitle: "What the Windows alert shows.", systemImage: "bell.badge") {
+        SectionCard("Notifications", subtitle: "What the Windows alert shows. You can also change these in Bubblecast on Windows.", systemImage: "bell.badge") {
             VStack(alignment: .leading, spacing: 12) {
                 SwitchRow(title: "Sender contact name",
                           detail: "Look up the sender in Contacts.",
@@ -248,30 +248,55 @@ struct RelayView: View {
                 SwitchRow(title: "Ignore old or iCloud-synced messages",
                           detail: "Older or unreadable timestamps are skipped. Turn this off only to catch up on the full backlog.",
                           isOn: $model.suppressOldMessages)
-                HStack(spacing: 8) {
-                    Text("Maximum message age")
-                        .font(.system(size: 12))
-                        .foregroundStyle(RelayTheme.mutedForeground)
-                    Spacer()
-                    Text("\(model.maximumMessageAgeMinutes) min")
-                        .font(.system(size: 12, weight: .medium))
-                        .monospacedDigit()
-                    Stepper("Maximum message age: \(model.maximumMessageAgeMinutes) minutes",
-                            value: $model.maximumMessageAgeMinutes, in: 1...1440)
-                        .labelsHidden()
-                        .controlSize(.small)
-                }
-                .padding(.vertical, 6)
-                .padding(.horizontal, 10)
-                .background(RoundedRectangle(cornerRadius: RelayTheme.controlRadius, style: .continuous).fill(RelayTheme.muted))
-                .disabled(!model.suppressOldMessages)
-                .opacity(model.suppressOldMessages ? 1 : 0.55)
+                minutesRow(label: "Maximum message age", value: $model.maximumMessageAgeMinutes, range: 1...1440,
+                           accessibility: "Maximum message age: \(model.maximumMessageAgeMinutes) minutes")
+                    .disabled(!model.suppressOldMessages)
+                    .opacity(model.suppressOldMessages ? 1 : 0.55)
                 Hairline()
                 SwitchRow(title: "Include associated-message rows",
                           detail: "May include reactions. Apple doesn't document these types; rows without text get a generic label.",
                           isOn: $model.notifyForReactions)
+                Hairline()
+                SwitchRow(title: "Skip messages I've already read",
+                          detail: "Checked just before sending, so it mostly catches messages that waited while Windows was unreachable. A conversation left open in Messages on this Mac counts as read.",
+                          isOn: $model.skipReadMessages)
+                Hairline()
+                SwitchRow(title: "Stay quiet while I'm active in a chat",
+                          detail: "No alert for a conversation you sent or read a message in recently, on any of your devices.",
+                          isOn: $model.quietWhileActive)
+                minutesRow(label: "Quiet for", value: $model.activeMinutes, range: 1...60,
+                           accessibility: "Stay quiet for \(model.activeMinutes) minutes after activity")
+                    .disabled(!model.quietWhileActive)
+                    .opacity(model.quietWhileActive ? 1 : 0.55)
+                Label {
+                    Text(model.sharingStatus)
+                } icon: {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                }
+                .font(.system(size: 11))
+                .foregroundStyle(RelayTheme.mutedForeground)
+                .accessibilityLabel("Settings sharing: \(model.sharingStatus)")
             }
         }
+    }
+
+    /// A compact "label … N min [stepper]" row on a muted background.
+    private func minutesRow(label: String, value: Binding<Int>, range: ClosedRange<Int>, accessibility: String) -> some View {
+        HStack(spacing: 8) {
+            Text(label)
+                .font(.system(size: 12))
+                .foregroundStyle(RelayTheme.mutedForeground)
+            Spacer()
+            Text("\(value.wrappedValue) min")
+                .font(.system(size: 12, weight: .medium))
+                .monospacedDigit()
+            Stepper(accessibility, value: value, in: range)
+                .labelsHidden()
+                .controlSize(.small)
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 10)
+        .background(RoundedRectangle(cornerRadius: RelayTheme.controlRadius, style: .continuous).fill(RelayTheme.muted))
     }
 
     private var advancedCard: some View {
@@ -343,6 +368,7 @@ struct RelayView: View {
                         Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 5) {
                             diagnosticRow("Suppressed old/undated", "\(model.suppressedOldMessageCount)")
                             diagnosticRow("Duplicates", "\(model.duplicateMessageCount)")
+                            diagnosticRow("Skipped as seen", "\(model.skippedSeenCount)")
                             diagnosticRow("Catch-up rows", "\(model.catchUpSummaryCount)")
                             diagnosticRow("Cursor re-baselines", "\(model.cursorRebaselineCount)")
                             diagnosticRow("Timestamp units", model.timestampUnitSummary)

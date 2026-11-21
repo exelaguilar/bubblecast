@@ -8,8 +8,9 @@ This document defines the request format between Bubblecast for Mac and Bubbleca
 | --- | --- | --- |
 | `POST /notify` | Display one notification | `204 No Content` |
 | `GET /health` | Check that the receiver is reachable | `204 No Content` |
+| `POST /settings` | Share the Mac's notification settings (1.2+) | `204 No Content` |
 
-Both endpoints use TCP port `8765`. Other method/path pairs receive `404 Not Found`. Invalid or expired signatures and reused nonces receive `403 Forbidden`. Requests have no body; the receiver closes the connection after its response.
+All endpoints use TCP port `8765` (and `8766` for TLS). Other method/path pairs receive `404 Not Found`. Invalid or expired signatures and reused nonces receive `403 Forbidden`. Requests have no body; the receiver closes the connection after its response.
 
 ## Authentication
 
@@ -125,6 +126,39 @@ Bubblecast for Windows 1.1.0 and later accepts only v2 requests, on port 8765 (H
 ## Discovery
 
 Windows announces the receiver with DNS-SD over multicast DNS as `<PC name>._bubblecast._tcp.local`, with an SRV record for port 8765, TXT keys `v=2` and `tls=8766` (empty when TLS is unavailable), and address records for `<PC name>.local`. It announces on the primary LAN address, or on the configured listen address. The Mac browses for `_bubblecast._tcp` and addresses a chosen PC as `<PC name>.local`. Discovery only finds the PC; every request is still signed with the pairing token.
+
+## Shared settings (1.2+)
+
+The Mac's notification settings can be changed on either side. They travel as one ASCII string of `key=value` pairs joined by `;`:
+
+```text
+rev=1700000000000;names=1;previews=0;old=1;age=10;reactions=0;read=1;active=1;activemin=2
+```
+
+| Key | Meaning |
+| --- | --- |
+| `rev` | Revision: Unix time in milliseconds of the last edit. Required. `0` means "nothing yet". |
+| `names`, `previews`, `reactions` | Sender names, message previews, associated-message rows (`1`/`0`). |
+| `old`, `age` | Ignore old messages, and the maximum age in minutes (1–1440). |
+| `read` | Skip messages already marked read. |
+| `active`, `activemin` | Stay quiet in a conversation with recent activity, and for how many minutes (1–60). |
+
+Receivers ignore unknown keys and use defaults for missing ones, so either side can add settings later. The string is at most 512 characters.
+
+- **Mac → Windows:** `POST /settings` with kind `settings`, an empty message ID, and the string in `X-Relay-Settings`. In the v2 canonical string the sender field is empty and the string takes the preview's place. Windows keeps it if its `rev` is newer than what it has, and answers `400` if the string is malformed.
+- **Windows → Mac:** every accepted `/health`, `/notify`, and `/settings` response from a 1.2 receiver carries `X-Relay-Settings` (its current string, or `rev=0`) and `X-Relay-Settings-Signature`: lowercase hex `HMAC-SHA256(UTF8(token), UTF8("v2-settings\n" + requestNonce + "\n" + string))`. Binding it to the request's nonce stops an old response from being replayed. The Mac ignores headers whose signature doesn't match.
+- The newer `rev` wins. The Mac adopts a newer Windows copy, and pushes its own when Windows has an older one. A Mac upgrading from 1.1 starts at `rev=1`, so its existing choices seed a PC that has none.
+
+### Synthetic settings vectors
+
+```text
+Token:      aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+Settings:   rev=1700000000000;names=1;previews=0;old=1;age=10;reactions=0;read=1;active=1;activemin=2
+Nonce:      123e4567-e89b-12d3-a456-426614174002
+Request:    POST /settings at 1700000000, kind settings
+Request signature:  284b277e830115a39d9c89a696468820655071f5ec5ae3323dccd14ef9354ca9
+Response signature: 467902cb72f63cb24a7df57588fbd9c29a3b7626b3aed8836c51c2f427ef550b
+```
 
 ## Pinning on first use
 
