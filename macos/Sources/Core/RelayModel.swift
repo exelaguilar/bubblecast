@@ -131,18 +131,12 @@ final class RelayModel: ObservableObject {
 
         delivery.onSuppressedOld = { [weak self] in
             guard let self else { return }
-            self.suppressedOldTotal += 1
-            self.defaults.set(self.suppressedOldTotal, forKey: RelayPreferences.suppressedOldMessageCount)
-            let total = self.suppressedOldTotal
-            DispatchQueue.main.async { self.suppressedOldMessageCount = total }
+            self.addToCounter(&self.suppressedOldTotal, key: RelayPreferences.suppressedOldMessageCount, published: \.suppressedOldMessageCount)
             self.setStatus("Ignored an old, undated, or unexpected future message.")
         }
         delivery.onDuplicate = { [weak self] in
             guard let self else { return }
-            self.duplicateTotal += 1
-            self.defaults.set(self.duplicateTotal, forKey: RelayPreferences.duplicateMessageCount)
-            let total = self.duplicateTotal
-            DispatchQueue.main.async { self.duplicateMessageCount = total }
+            self.addToCounter(&self.duplicateTotal, key: RelayPreferences.duplicateMessageCount, published: \.duplicateMessageCount)
         }
         delivery.shouldSkip = { [weak self] row in
             guard let self else { return false }
@@ -152,10 +146,7 @@ final class RelayModel: ObservableObject {
         }
         delivery.onSkipped = { [weak self] in
             guard let self else { return }
-            self.skippedSeenTotal += 1
-            self.defaults.set(self.skippedSeenTotal, forKey: RelayPreferences.skippedSeenCount)
-            let total = self.skippedSeenTotal
-            DispatchQueue.main.async { self.skippedSeenCount = total }
+            self.addToCounter(&self.skippedSeenTotal, key: RelayPreferences.skippedSeenCount, published: \.skippedSeenCount)
             self.setStatus("Skipped a message you've already seen or are replying to elsewhere.", level: .ok)
         }
         contacts.onSummary = { [weak self] summary in
@@ -411,10 +402,7 @@ final class RelayModel: ObservableObject {
                 setStatus("Monitoring Messages. Existing conversations were ignored.", level: .ok)
                 return
             case .rebaselined:
-                rebaselineTotal += 1
-                defaults.set(rebaselineTotal, forKey: RelayPreferences.cursorRebaselineCount)
-                let total = rebaselineTotal
-                DispatchQueue.main.async { self.cursorRebaselineCount = total }
+                addToCounter(&rebaselineTotal, key: RelayPreferences.cursorRebaselineCount, published: \.cursorRebaselineCount)
                 setStatus("Messages database position changed. Monitoring from its current end.", level: .warning)
             case .unchanged:
                 break
@@ -473,10 +461,7 @@ final class RelayModel: ObservableObject {
         switch outcome {
         case .delivered:
             if case .sendCatchUp(let rows, _) = step {
-                catchUpTotal += rows.count
-                defaults.set(catchUpTotal, forKey: RelayPreferences.catchUpSummaryCount)
-                let total = catchUpTotal
-                DispatchQueue.main.async { self.catchUpSummaryCount = total }
+                addToCounter(&catchUpTotal, rows.count, key: RelayPreferences.catchUpSummaryCount, published: \.catchUpSummaryCount)
                 setStatus("Catch-up summary sent to Windows.", level: .ok)
             } else {
                 setStatus("New message alert sent to Windows.", level: .ok)
@@ -505,6 +490,14 @@ final class RelayModel: ObservableObject {
     private func cancelRetry() {
         retryWork?.cancel()
         retryWork = nil
+    }
+
+    /// Adds to a counter kept on the queue, saves it, and publishes the new total on the main thread.
+    private func addToCounter(_ total: inout Int, _ amount: Int = 1, key: String, published: ReferenceWritableKeyPath<RelayModel, Int>) {
+        total += amount
+        defaults.set(total, forKey: key)
+        let value = total
+        DispatchQueue.main.async { self[keyPath: published] = value }
     }
 
     private func recordSuccessfulNotification() {
@@ -538,16 +531,14 @@ final class RelayModel: ObservableObject {
             delivery.suppressOldMessages = updated.suppressOldMessages
             delivery.maximumAge = TimeInterval(updated.maximumMessageAgeMinutes * 60)
             delivery.clearResolvedNames()
-            DispatchQueue.main.async {
-                self.adoptSharedSettings(remote)
-                self.sharingStatus = "Shared with Windows"
-            }
+            DispatchQueue.main.async { self.adoptSharedSettings(remote) }
+            setSharingStatus(Self.sharedWithWindows)
             setStatus("Notification settings updated from Windows.", level: .ok)
             pumpDelivery()
         } else if remote.revision < sharedRevision {
             pushSharedSettings()
         } else {
-            DispatchQueue.main.async { self.sharingStatus = "Shared with Windows" }
+            setSharingStatus(Self.sharedWithWindows)
         }
     }
 
@@ -561,10 +552,21 @@ final class RelayModel: ObservableObject {
             self?.queue.async {
                 guard let self else { return }
                 self.sharingPushInFlight = false
-                if outcome == .notFound {
-                    DispatchQueue.main.async { self.sharingStatus = "Update Bubblecast on Windows to 1.2 to change these there" }
+                switch outcome {
+                case .delivered: self.setSharingStatus(Self.sharedWithWindows)
+                case .notFound: self.setSharingStatus("Update Bubblecast on Windows to 1.2 to change these there")
+                case .rejected, .transient: break
                 }
             }
+        }
+    }
+
+    private static let sharedWithWindows = "Shared with Windows"
+
+    /// Publishes the sharing status only when it changes (it's confirmed on every accepted request).
+    private func setSharingStatus(_ value: String) {
+        DispatchQueue.main.async {
+            if self.sharingStatus != value { self.sharingStatus = value }
         }
     }
 

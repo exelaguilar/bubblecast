@@ -49,18 +49,22 @@ struct RelaySettings: Equatable {
     static func load(from defaults: UserDefaults = .standard, tokenStore: PairingTokenStore = KeychainTokenStore()) -> RelaySettings {
         // The token lives only in the Keychain. An unreadable item loads as empty; saving writes a fresh one.
         let pairingToken = ((try? tokenStore.readToken()) ?? nil) ?? ""
+        let shared = SharedSettings.defaults
+        func clamp(_ value: Int, _ range: ClosedRange<Int>) -> Int { min(range.upperBound, max(range.lowerBound, value)) }
         return RelaySettings(
             windowsAddress: defaults.string(forKey: RelayPreferences.windowsAddress) ?? "",
             pairingToken: pairingToken,
-            includeSenderNames: defaults.object(forKey: RelayPreferences.includeSenderNames) as? Bool ?? true,
-            includeMessagePreviews: defaults.object(forKey: RelayPreferences.includeMessagePreviews) as? Bool ?? true,
-            suppressOldMessages: defaults.object(forKey: RelayPreferences.suppressOldMessages) as? Bool ?? true,
-            maximumMessageAgeMinutes: max(1, min(1440, defaults.object(forKey: RelayPreferences.maximumMessageAgeMinutes) as? Int ?? 10)),
+            includeSenderNames: defaults.object(forKey: RelayPreferences.includeSenderNames) as? Bool ?? shared.includeSenderNames,
+            includeMessagePreviews: defaults.object(forKey: RelayPreferences.includeMessagePreviews) as? Bool ?? shared.includeMessagePreviews,
+            suppressOldMessages: defaults.object(forKey: RelayPreferences.suppressOldMessages) as? Bool ?? shared.suppressOldMessages,
+            maximumMessageAgeMinutes: clamp(defaults.object(forKey: RelayPreferences.maximumMessageAgeMinutes) as? Int ?? shared.maximumMessageAgeMinutes,
+                                            SharedSettings.ageRange),
             senderNameOverrides: defaults.string(forKey: RelayPreferences.senderNameOverrides) ?? "",
-            notifyForReactions: defaults.object(forKey: RelayPreferences.notifyForReactions) as? Bool ?? false,
-            skipReadMessages: defaults.object(forKey: RelayPreferences.skipReadMessages) as? Bool ?? SharedSettings.defaults.skipReadMessages,
-            quietWhileActive: defaults.object(forKey: RelayPreferences.quietWhileActive) as? Bool ?? SharedSettings.defaults.quietWhileActive,
-            activeMinutes: max(1, min(60, defaults.object(forKey: RelayPreferences.activeMinutes) as? Int ?? SharedSettings.defaults.activeMinutes)),
+            notifyForReactions: defaults.object(forKey: RelayPreferences.notifyForReactions) as? Bool ?? shared.notifyForReactions,
+            skipReadMessages: defaults.object(forKey: RelayPreferences.skipReadMessages) as? Bool ?? shared.skipReadMessages,
+            quietWhileActive: defaults.object(forKey: RelayPreferences.quietWhileActive) as? Bool ?? shared.quietWhileActive,
+            activeMinutes: clamp(defaults.object(forKey: RelayPreferences.activeMinutes) as? Int ?? shared.activeMinutes,
+                                 SharedSettings.activeMinutesRange),
             useTLS: defaults.object(forKey: RelayPreferences.useTLS) as? Bool ?? true,
             tlsCertificateFingerprint: defaults.string(forKey: RelayPreferences.tlsCertificateFingerprint) ?? ""
         )
@@ -120,6 +124,7 @@ struct RelaySettings: Equatable {
 
 enum WindowsRelayEndpoint {
     static let port = 8765
+    static let tlsPort = 8766
 
     static func url(address: String, path: String, useTLS: Bool = false) -> URL? {
         var hostText = address.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -135,7 +140,7 @@ enum WindowsRelayEndpoint {
         var endpoint = URLComponents()
         endpoint.scheme = useTLS ? "https" : "http"
         endpoint.host = host
-        endpoint.port = useTLS ? 8766 : port
+        endpoint.port = useTLS ? tlsPort : port
         endpoint.path = path
         return endpoint.url
     }

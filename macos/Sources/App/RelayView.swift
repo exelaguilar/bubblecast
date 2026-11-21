@@ -17,9 +17,10 @@ private enum RelayTheme {
     static let mutedForeground = dynamic(light: 0x71717A, dark: 0xA1A1AA)
     static let primary = dynamic(light: 0x18181B, dark: 0xFAFAFA)
     static let primaryForeground = dynamic(light: 0xFAFAFA, dark: 0x18181B)
-    static let success = dynamic(light: 0x16A34A, dark: 0x4ADE80)
-    static let warning = dynamic(light: 0xD97706, dark: 0xFBBF24)
-    static let destructive = dynamic(light: 0xDC2626, dark: 0xF87171)
+    // Light values are dark enough for 4.5:1 contrast as small text on white (they match Windows).
+    static let success = dynamic(light: 0x15803D, dark: 0x4ADE80)
+    static let warning = dynamic(light: 0xB45309, dark: 0xFBBF24)
+    static let destructive = dynamic(light: 0xB91C1C, dark: 0xF87171)
 
     static let cardRadius: CGFloat = 10
     static let controlRadius: CGFloat = 6
@@ -77,7 +78,8 @@ struct RelayView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     statusCard
                     pairingCard
-                    notificationsCard
+                    alertContentCard
+                    quietCard
                     advancedCard
                 }
                 .padding(16)
@@ -234,8 +236,9 @@ struct RelayView: View {
         }
     }
 
-    private var notificationsCard: some View {
-        SectionCard("Notifications", subtitle: "What the Windows alert shows. You can also change these in Bubblecast on Windows.", systemImage: "bell.badge") {
+    // The same two groups as the Mac page in Bubblecast for Windows, which edits these settings too.
+    private var alertContentCard: some View {
+        SectionCard("What alerts show", subtitle: "Chosen here before anything is sent. You can also change these in Bubblecast on Windows.", systemImage: "bell.badge") {
             VStack(alignment: .leading, spacing: 12) {
                 SwitchRow(title: "Sender contact name",
                           detail: "Look up the sender in Contacts.",
@@ -245,29 +248,9 @@ struct RelayView: View {
                           detail: "Include message text. Previews may appear in Windows notification history.",
                           isOn: $model.includeMessagePreviews)
                 Hairline()
-                SwitchRow(title: "Ignore old or iCloud-synced messages",
-                          detail: "Older or unreadable timestamps are skipped. Turn this off only to catch up on the full backlog.",
-                          isOn: $model.suppressOldMessages)
-                minutesRow(label: "Maximum message age", value: $model.maximumMessageAgeMinutes, range: 1...1440,
-                           accessibility: "Maximum message age: \(model.maximumMessageAgeMinutes) minutes")
-                    .disabled(!model.suppressOldMessages)
-                    .opacity(model.suppressOldMessages ? 1 : 0.55)
-                Hairline()
                 SwitchRow(title: "Include associated-message rows",
                           detail: "May include reactions. Apple doesn't document these types; rows without text get a generic label.",
                           isOn: $model.notifyForReactions)
-                Hairline()
-                SwitchRow(title: "Skip messages I've already read",
-                          detail: "Checked just before sending, so it mostly catches messages that waited while Windows was unreachable. A conversation left open in Messages on this Mac counts as read.",
-                          isOn: $model.skipReadMessages)
-                Hairline()
-                SwitchRow(title: "Stay quiet while I'm active in a chat",
-                          detail: "No alert for a conversation you sent or read a message in recently, on any of your devices.",
-                          isOn: $model.quietWhileActive)
-                minutesRow(label: "Quiet for", value: $model.activeMinutes, range: 1...60,
-                           accessibility: "Stay quiet for \(model.activeMinutes) minutes after activity")
-                    .disabled(!model.quietWhileActive)
-                    .opacity(model.quietWhileActive ? 1 : 0.55)
                 Label {
                     Text(model.sharingStatus)
                 } icon: {
@@ -276,6 +259,32 @@ struct RelayView: View {
                 .font(.system(size: 11))
                 .foregroundStyle(RelayTheme.mutedForeground)
                 .accessibilityLabel("Settings sharing: \(model.sharingStatus)")
+            }
+        }
+    }
+
+    private var quietCard: some View {
+        SectionCard("When to stay quiet", subtitle: "Skipped messages are never sent to Windows.", systemImage: "moon") {
+            VStack(alignment: .leading, spacing: 12) {
+                SwitchRow(title: "Skip messages I've already read",
+                          detail: "Checked just before sending, so it mostly catches messages that waited while Windows was unreachable. A conversation left open in Messages on this Mac counts as read.",
+                          isOn: $model.skipReadMessages)
+                Hairline()
+                SwitchRow(title: "Stay quiet while I'm active in a chat",
+                          detail: "No alert for a conversation you sent or read a message in recently, on any of your devices.",
+                          isOn: $model.quietWhileActive)
+                minutesRow(label: "Quiet for", value: $model.activeMinutes, range: SharedSettings.activeMinutesRange,
+                           accessibility: "Stay quiet for \(model.activeMinutes) minutes after activity")
+                    .disabled(!model.quietWhileActive)
+                    .opacity(model.quietWhileActive ? 1 : 0.55)
+                Hairline()
+                SwitchRow(title: "Ignore old or iCloud-synced messages",
+                          detail: "Older or unreadable timestamps are skipped. Turn this off only to catch up on the full backlog.",
+                          isOn: $model.suppressOldMessages)
+                minutesRow(label: "Maximum message age", value: $model.maximumMessageAgeMinutes, range: SharedSettings.ageRange,
+                           accessibility: "Maximum message age: \(model.maximumMessageAgeMinutes) minutes")
+                    .disabled(!model.suppressOldMessages)
+                    .opacity(model.suppressOldMessages ? 1 : 0.55)
             }
         }
     }
