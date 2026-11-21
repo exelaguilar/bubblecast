@@ -7,7 +7,7 @@ macos/DerivedData/
 macos/.build/
 .swiftpm/
 
-# Windows build output (the reviewed baseline binaries in windows/release are tracked)
+# Windows build output
 windows/build/
 *.pdb
 *.ilk

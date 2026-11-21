@@ -1,6 +1,6 @@
 # Bubblecast relay protocol (v1 and v2)
 
-This document defines the request format between Bubblecast for Mac and Bubblecast for Windows. Both sides use v2. The v1 format described below is kept only as a reference vector for the shared HMAC; since 1.1.0 Windows rejects requests without `X-Relay-Version: 2`. HTTP v1 remains available on TCP 8765. v2 requests may use the same HTTP endpoint or pinned TLS on TCP 8766. HMAC-SHA256 authenticates and protects request integrity; only TLS hides notification contents on the LAN.
+This document defines the request format between Bubblecast for Mac and Bubblecast for Windows. Both sides use v2. The v1 format described below is kept only as a reference vector for the shared HMAC; since 1.1.0 Windows rejects requests without `X-Relay-Version: 2`. Requests use HTTP on TCP 8765 or pinned TLS on TCP 8766. HMAC-SHA256 authenticates and protects request integrity; only TLS hides notification contents on the LAN.
 
 ## Endpoints and responses
 
@@ -10,7 +10,7 @@ This document defines the request format between Bubblecast for Mac and Bubbleca
 | `GET /health` | Check that the receiver is reachable | `204 No Content` |
 | `POST /settings` | Share the Mac's notification settings (1.2+) | `204 No Content` |
 
-All endpoints use TCP port `8765` (and `8766` for TLS). Other method/path pairs receive `404 Not Found`. Invalid or expired signatures and reused nonces receive `403 Forbidden`. Requests have no body; the receiver closes the connection after its response.
+All endpoints use TCP port `8765` (and `8766` for TLS). Other method/path pairs receive `404 Not Found`. Invalid or expired signatures and reused nonces receive `403 Forbidden`. Requests have no body; the receiver closes the connection after its response. It also closes a connection that hasn't delivered a complete request, or finished the TLS handshake, within 3 seconds. It handles four connections at a time and turns away more (HTTP answers `503`).
 
 ## Authentication
 
@@ -75,11 +75,11 @@ The self-checks exercise v1 and v2 signature vectors and confirm that changing a
 
 ## Version 2
 
-Windows accepts v1 and v2 requests. v1 canonicalization is unchanged. A v2 request adds these headers:
+Windows accepts only v2. A v2 request adds these headers to the v1 set:
 
 - `X-Relay-Version: 2`
-- `X-Relay-Kind: message|test|health`
-- `X-Relay-Message-Id`: empty for `test` and `health`; 32 lowercase hex characters for `message`.
+- `X-Relay-Kind: message|test|health|settings`
+- `X-Relay-Message-Id`: empty for `test`, `health`, and `settings`; 32 lowercase hex characters for `message`.
 
 The message ID is the first 32 lowercase hex characters of `HMAC-SHA256(UTF8(token), UTF8("msgid\n" + messageGuid))`. It is opaque to Windows and deduplicated there for ten minutes. For a count-only catch-up alert, the Mac derives one ID from the joined GUIDs in that batch.
 
@@ -97,7 +97,7 @@ senderBase64
 previewBase64
 ```
 
-All responses include `X-Relay-Server-Version`. A v2 `403` also includes `X-Relay-Error` with `auth`, `clock-skew`, or `replay`. These response headers are ignored by v1 clients.
+All responses include `X-Relay-Server-Version`. A v2 `403` also includes `X-Relay-Error` with `auth`, `clock-skew`, or `replay`.
 
 ### Synthetic v2 notification vector
 
@@ -117,7 +117,7 @@ Signature:  f4182f094163c132a423b6be497efd9d40e79f57503a19b644d2b2bce3c7f876
 
 ## Optional pinned TLS
 
-Windows generates a self-signed TLS 1.2 certificate in the current user's certificate store and listens on TCP 8766 when that succeeds. Its settings show the SHA-256 fingerprint of the certificate's DER bytes. The Mac uses an ephemeral URL session and accepts the self-signed certificate only when that fingerprint matches. HMAC remains required. Port 8765 remains available for plain HTTP and v1 rollback. The installer does not create firewall rules; allow 8766 manually only if the Windows firewall blocks the trusted LAN connection.
+Windows generates a self-signed TLS 1.2 certificate in the current user's certificate store and listens on TCP 8766 when that succeeds. Its settings show the SHA-256 fingerprint of the certificate's DER bytes. The Mac uses an ephemeral URL session and accepts the self-signed certificate only when that fingerprint matches. HMAC remains required. Port 8765 remains available for plain HTTP (signed, but not encrypted). The installer does not create firewall rules; allow 8766 manually only if the Windows firewall blocks the trusted LAN connection.
 
 ## Compatibility boundary
 
