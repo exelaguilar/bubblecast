@@ -58,9 +58,10 @@ namespace Bubblecast
 
             // ── Header: identity and live pairing badge (always visible) ──
             Panel header = new Panel { Dock = DockStyle.Top, Height = 72, Tag = UiRole.Surface };
-            TableLayoutPanel headerLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, Padding = new Padding(24, 0, 24, 0), Margin = Padding.Empty };
+            TableLayoutPanel headerLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, RowCount = 1, Padding = new Padding(24, 0, 24, 0), Margin = Padding.Empty };
             headerLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             headerLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            headerLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             headerLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             headerLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             PictureBox logo = new PictureBox
@@ -83,7 +84,9 @@ namespace Bubblecast
             _pairingLabel = pairing;
             headerLayout.Controls.Add(logo, 0, 0);
             headerLayout.Controls.Add(titleStack, 1, 0);
-            headerLayout.Controls.Add(pairing, 2, 0);
+            SegmentedControl pages = new SegmentedControl(labelFont, "This PC", "Mac") { Anchor = AnchorStyles.Right, AccessibleName = "Settings page" };
+            headerLayout.Controls.Add(pages, 2, 0);
+            headerLayout.Controls.Add(pairing, 3, 0);
             header.Controls.Add(headerLayout);
             header.Controls.Add(new Hairline { Dock = DockStyle.Bottom });
 
@@ -337,6 +340,60 @@ namespace Bubblecast
             UiLayout.AddRow(advancedBody, diagnostics);
             UiLayout.AddHelp(advancedBody, "Diagnostics exclude the pairing token, addresses, sender names, and message text.", smallFont);
 
+            // ── Mac page: the Mac's notification settings, shared both ways (RelayContext.SharedSettings.cs) ──
+            SharedSettings sharedAtOpen = CurrentSharedSettings() ?? new SharedSettings();
+            bool applyingShared = false;
+            CardPanel showCard = UiLayout.NewCard("What alerts show", "Chosen on the Mac before anything is sent, so turning these off keeps the text off the network too.", sectionFont, smallFont);
+            RelaySwitch macNames = new RelaySwitch();
+            UiLayout.AddRow(showCard, UiLayout.ActionRow("Sender contact name", "The Mac looks up the sender in its Contacts.", macNames, labelFont, smallFont));
+            UiLayout.AddSeparator(showCard);
+            RelaySwitch macPreviews = new RelaySwitch();
+            UiLayout.AddRow(showCard, UiLayout.ActionRow("Message previews", "Include message text. Previews may appear in Windows notification history.", macPreviews, labelFont, smallFont));
+            UiLayout.AddSeparator(showCard);
+            RelaySwitch macReactions = new RelaySwitch();
+            UiLayout.AddRow(showCard, UiLayout.ActionRow("Include associated-message rows", "May include reactions; rows without text get a generic label.", macReactions, labelFont, smallFont));
+            UiLayout.AddSeparator(showCard);
+            Label sharedStatus = UiLayout.MakeText(GetSharedSettingsStatusText(), UiRole.Muted, smallFont, new Padding(0, 0, 0, 12));
+            sharedStatus.AccessibleName = "Mac settings sharing status";
+            _sharedStatusLabel = sharedStatus;
+            UiLayout.AddRow(showCard, sharedStatus);
+
+            CardPanel quietCard = UiLayout.NewCard("When to stay quiet", "Skipped messages are never sent to this PC.", sectionFont, smallFont);
+            RelaySwitch macSkipRead = new RelaySwitch();
+            UiLayout.AddRow(quietCard, UiLayout.ActionRow("Skip messages I've already read", "Checked just before sending, so it mostly catches messages that waited while this PC was unreachable. A conversation left open in Messages on the Mac counts as read.", macSkipRead, labelFont, smallFont));
+            UiLayout.AddSeparator(quietCard);
+            RelaySwitch macQuietActive = new RelaySwitch();
+            UiLayout.AddRow(quietCard, UiLayout.ActionRow("Stay quiet while I'm active in a chat", "No alert for a conversation you sent or read a message in recently, on any of your devices.", macQuietActive, labelFont, smallFont));
+            TextBox macActiveMinutes = new TextBox { MaxLength = 2, TextAlign = HorizontalAlignment.Center, AccessibleName = "Minutes to stay quiet after activity in a conversation" };
+            UiLayout.AddRow(quietCard, MinutesRow("For", macActiveMinutes, "minutes after you were active", baseFont));
+            UiLayout.AddSeparator(quietCard);
+            RelaySwitch macSkipOld = new RelaySwitch();
+            UiLayout.AddRow(quietCard, UiLayout.ActionRow("Ignore old or iCloud-synced messages", "Older or unreadable timestamps are skipped. Turn this off only to catch up on the full backlog.", macSkipOld, labelFont, smallFont));
+            TextBox macMaximumAge = new TextBox { MaxLength = 4, TextAlign = HorizontalAlignment.Center, AccessibleName = "Maximum message age in minutes" };
+            UiLayout.AddRow(quietCard, MinutesRow("Older than", macMaximumAge, "minutes", baseFont));
+
+            Control[] sharedControls = { macNames, macPreviews, macReactions, macSkipRead, macQuietActive, macActiveMinutes, macSkipOld, macMaximumAge };
+            Action<SharedSettings> showShared = delegate(SharedSettings values)
+            {
+                applyingShared = true;
+                macNames.Checked = values.IncludeSenderNames;
+                macPreviews.Checked = values.IncludeMessagePreviews;
+                macReactions.Checked = values.NotifyForReactions;
+                macSkipRead.Checked = values.SkipReadMessages;
+                macQuietActive.Checked = values.QuietWhileActive;
+                macActiveMinutes.Text = values.ActiveMinutes.ToString(CultureInfo.InvariantCulture);
+                macSkipOld.Checked = values.SuppressOldMessages;
+                macMaximumAge.Text = values.MaximumMessageAgeMinutes.ToString(CultureInfo.InvariantCulture);
+                bool available = CurrentSharedSettings() != null;
+                foreach (Control control in sharedControls) control.Enabled = available;
+                macActiveMinutes.Enabled = available && values.QuietWhileActive;
+                macMaximumAge.Enabled = available && values.SuppressOldMessages;
+                applyingShared = false;
+            };
+            showShared(sharedAtOpen);
+            macQuietActive.CheckedChanged += delegate { macActiveMinutes.Enabled = macQuietActive.Enabled && macQuietActive.Checked; };
+            macSkipOld.CheckedChanged += delegate { macMaximumAge.Enabled = macSkipOld.Enabled && macSkipOld.Checked; };
+
             // ── Footer: live receiver status and the persistent Save action ──
             Panel footer = new Panel { Dock = DockStyle.Bottom, Height = 64, Tag = UiRole.Surface };
             TableLayoutPanel footerLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, Padding = new Padding(24, 0, 24, 0), Margin = Padding.Empty };
@@ -377,8 +434,40 @@ namespace Bubblecast
                     listenAddress.Focus();
                     return;
                 }
+                int activeMinutes;
+                int maximumAge;
+                bool sharedAvailable = CurrentSharedSettings() != null;
+                if (sharedAvailable && (!Int32.TryParse(macActiveMinutes.Text.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out activeMinutes) || activeMinutes < 1 || activeMinutes > 60))
+                {
+                    pages.SelectedIndex = 1;
+                    MessageBox.Show("Enter how long to stay quiet as 1 to 60 minutes.", "Bubblecast", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    macActiveMinutes.Focus();
+                    return;
+                }
+                if (sharedAvailable && (!Int32.TryParse(macMaximumAge.Text.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out maximumAge) || maximumAge < 1 || maximumAge > 1440))
+                {
+                    pages.SelectedIndex = 1;
+                    MessageBox.Show("Enter the maximum message age as 1 to 1440 minutes.", "Bubblecast", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    macMaximumAge.Focus();
+                    return;
+                }
                 try
                 {
+                    if (sharedAvailable)
+                    {
+                        SaveSharedSettingsFromUi(new SharedSettings
+                        {
+                            IncludeSenderNames = macNames.Checked,
+                            IncludeMessagePreviews = macPreviews.Checked,
+                            NotifyForReactions = macReactions.Checked,
+                            SkipReadMessages = macSkipRead.Checked,
+                            QuietWhileActive = macQuietActive.Checked,
+                            ActiveMinutes = Int32.Parse(macActiveMinutes.Text.Trim(), CultureInfo.InvariantCulture),
+                            SuppressOldMessages = macSkipOld.Checked,
+                            MaximumMessageAgeMinutes = Int32.Parse(macMaximumAge.Text.Trim(), CultureInfo.InvariantCulture)
+                        });
+                        showShared(CurrentSharedSettings());
+                    }
                     bool listenChanged = SaveSettings(quietHours.Checked, validatedStart, validatedEnd, mutedSenders.Text, validatedTarget, allowPairedMacOnly.Checked, _lastMacAddress,
                         macQuietAlert.Checked, clickOpensMac.Checked, listenAddress.Text, discoverable.Checked);
                     quietStart.Text = QuietHoursText.Format(validatedStart);
@@ -399,7 +488,24 @@ namespace Bubblecast
             footer.Controls.Add(footerLayout);
             footer.Controls.Add(new Hairline { Dock = DockStyle.Top });
 
-            EventHandler markUnsaved = delegate { unsaved.Visible = true; };
+            EventHandler markUnsaved = delegate { if (!applyingShared) unsaved.Visible = true; };
+            foreach (Control control in sharedControls)
+            {
+                RelaySwitch toggle = control as RelaySwitch;
+                if (toggle != null) toggle.CheckedChanged += markUnsaved;
+                else control.TextChanged += markUnsaved;
+            }
+            // The Mac changed its settings while this window is open: show them unless there are unsaved edits here.
+            _sharedSettingsChangedByMac = delegate(SharedSettings values)
+            {
+                if (form.IsDisposed) return;
+                if (unsaved.Visible)
+                {
+                    QueueStatus("The Mac changed its notification settings. Saving here will replace them with what's shown.");
+                    return;
+                }
+                showShared(values);
+            };
             quietHours.CheckedChanged += markUnsaved;
             quietStart.TextChanged += markUnsaved;
             quietEnd.TextChanged += markUnsaved;
@@ -461,6 +567,59 @@ namespace Bubblecast
             updatePageLayout();
             scroll.Resize += delegate { updatePageLayout(); };
 
+            Panel macScroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true, Tag = UiRole.Page, Visible = false };
+            NativeTheme.FollowAppTheme(macScroll);
+            TableLayoutPanel macPage = UiLayout.NewStack();
+            macPage.Dock = DockStyle.Top;
+            macPage.Padding = new Padding(24, 16, 24, 4);
+            macScroll.Controls.Add(macPage);
+            bool? macWideLayout = null;
+            Action updateMacLayout = delegate
+            {
+                bool wide = macScroll.ClientSize.Width >= UiPaint.Px(940);
+                if (macWideLayout.HasValue && macWideLayout.Value == wide) return;
+                macWideLayout = wide;
+                macPage.SuspendLayout();
+                macPage.Controls.Clear();
+                macPage.ColumnStyles.Clear();
+                macPage.RowStyles.Clear();
+                if (wide)
+                {
+                    macPage.ColumnCount = 2;
+                    macPage.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+                    macPage.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+                    macPage.RowCount = 1;
+                    macPage.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                    showCard.Margin = new Padding(0, 0, 8, 16);
+                    quietCard.Margin = new Padding(8, 0, 0, 16);
+                    macPage.Controls.Add(showCard, 0, 0);
+                    macPage.Controls.Add(quietCard, 1, 0);
+                }
+                else
+                {
+                    macPage.ColumnCount = 1;
+                    macPage.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+                    macPage.RowCount = 0;
+                    showCard.Margin = new Padding(0, 0, 0, 16);
+                    quietCard.Margin = new Padding(0, 0, 0, 16);
+                    UiLayout.AddRow(macPage, showCard);
+                    UiLayout.AddRow(macPage, quietCard);
+                }
+                macPage.ResumeLayout(true);
+            };
+            macScroll.Resize += delegate { updateMacLayout(); };
+            pages.SelectedIndexChanged += delegate
+            {
+                bool showMac = pages.SelectedIndex == 1;
+                form.SuspendLayout();
+                macScroll.Visible = showMac;
+                scroll.Visible = !showMac;
+                form.ResumeLayout(true);
+                if (showMac) updateMacLayout();
+                else updatePageLayout();
+            };
+
+            form.Controls.Add(macScroll);
             form.Controls.Add(scroll);
             form.Controls.Add(header);
             form.Controls.Add(footer);
@@ -488,6 +647,8 @@ namespace Bubblecast
             form.FormClosed += delegate
             {
                 SystemEvents.UserPreferenceChanged -= themeChanged;
+                _sharedSettingsChangedByMac = null;
+                _sharedStatusLabel = null;
                 copyResetTimer.Stop();
                 copyResetTimer.Dispose();
                 fingerprintResetTimer.Stop();
@@ -496,6 +657,25 @@ namespace Bubblecast
                 clearTokenTimer.Dispose();
             };
             return form;
+        }
+
+        /// <summary>A "label [number] unit" row, indented under the switch it belongs to.</summary>
+        private static TableLayoutPanel MinutesRow(string label, TextBox input, string unit, Font font)
+        {
+            TableLayoutPanel row = new TableLayoutPanel { ColumnCount = 4, RowCount = 1, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Margin = new Padding(0, 0, 0, 12), Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top };
+            for (int column = 0; column < 3; column++) row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            row.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            Label before = UiLayout.MakeText(label, UiRole.Muted, font, new Padding(0, 0, 8, 0));
+            Label after = UiLayout.MakeText(unit, UiRole.Muted, font, new Padding(8, 0, 0, 0));
+            before.Anchor = AnchorStyles.Left;
+            after.Anchor = AnchorStyles.Left;
+            FieldHost host = new FieldHost(input, 1) { PreferredWidth = 64, Anchor = AnchorStyles.Left };
+            input.EnabledChanged += delegate { host.Invalidate(); before.Enabled = input.Enabled; after.Enabled = input.Enabled; };
+            row.Controls.Add(before, 0, 0);
+            row.Controls.Add(host, 1, 0);
+            row.Controls.Add(after, 2, 0);
+            return row;
         }
     }
 }

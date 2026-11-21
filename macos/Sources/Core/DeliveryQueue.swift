@@ -97,6 +97,11 @@ final class DeliveryQueue {
     var onDuplicate: (() -> Void)?
     /// Called when an old, undated, or far-future row is dropped.
     var onSuppressedOld: (() -> Void)?
+    /// Asked just before a row is sent; returning true drops it (for example, it was already read, or
+    /// the user is active in that conversation elsewhere). Evaluated again on every attempt.
+    var shouldSkip: ((PendingMessage) -> Bool)?
+    /// Called when `shouldSkip` drops the row at the front of the queue.
+    var onSkipped: (() -> Void)?
 
     private let store: DeliveryStore
     private let now: () -> Date
@@ -198,6 +203,11 @@ final class DeliveryQueue {
                 finish(first, remember: true)
                 continue
             }
+            if shouldSkip?(first) == true {
+                onSkipped?()
+                finish(first, remember: true)
+                continue
+            }
             break
         }
         guard let first = pending.first else { return .idle }
@@ -206,7 +216,10 @@ final class DeliveryQueue {
         let expired = Array(pending.prefix { current.timeIntervalSince($0.firstReadAt) > maximumAge })
         inFlight = true
         if !expired.isEmpty {
-            return .sendCatchUp(expired, summary: Self.catchUpSummary(count: expired.count))
+            // The summary covers every expired row, but only counts the ones that still need attention.
+            // The front row was just checked, so at least one is counted.
+            let counted = 1 + expired.dropFirst().filter { shouldSkip?($0) != true }.count
+            return .sendCatchUp(expired, summary: Self.catchUpSummary(count: counted))
         }
         return .send(first)
     }

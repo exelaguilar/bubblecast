@@ -28,6 +28,9 @@ private final class DeliveryHarness {
     private(set) var sent: [DeliveryStep] = []
     private(set) var suppressedOld = 0
     private(set) var duplicates = 0
+    private(set) var skipped = 0
+    /// Row IDs the fake read-state check reports as already seen.
+    var seen = Set<Int64>()
 
     init(maximumAge: TimeInterval = 600, cursor: Int64? = 0) {
         let clock = FakeClock()
@@ -38,6 +41,8 @@ private final class DeliveryHarness {
         queue = DeliveryQueue(store: store, suppressOldMessages: true, maximumAge: maximumAge, now: { clock.now }, jitter: { $0.lowerBound })
         queue.onSuppressedOld = { [unowned self] in self.suppressedOld += 1 }
         queue.onDuplicate = { [unowned self] in self.duplicates += 1 }
+        queue.shouldSkip = { [unowned self] row in self.seen.contains(row.rowID) }
+        queue.onSkipped = { [unowned self] in self.skipped += 1 }
     }
 
     func row(_ id: Int64, guid: String, ageSeconds: TimeInterval? = 0) -> PendingMessage {
@@ -141,6 +146,68 @@ check(restored.queue.align(toMaximumRowID: 120) == .rebaselined && restored.stor
 let steady = DeliveryHarness(cursor: 90)
 check(steady.queue.align(toMaximumRowID: 120) == .unchanged && steady.store.cursor == 90, "cursor remains unchanged when it is within database range")
 
+let testToken0 = String(repeating: "a", count: 64)
+
+let seenHead = DeliveryHarness()
+seenHead.seen = [40]
+seenHead.queue.ingest([seenHead.row(40, guid: "seen-guid"), seenHead.row(41, guid: "unseen-guid")])
+seenHead.pump()
+check(seenHead.skipped == 1 && seenHead.sent.count == 1 && seenHead.queue.pending.isEmpty && seenHead.store.cursor == 41,
+      "a row already seen is skipped, the next row is sent, and the cursor advances past both")
+check(seenHead.queue.processedGUIDs.contains("seen-guid"), "a skipped row is remembered so it is never sent later")
+
+let seenLater = DeliveryHarness()
+seenLater.results = [.transient, .delivered]
+seenLater.queue.ingest([seenLater.row(42, guid: "read-while-waiting")])
+seenLater.pump()
+seenLater.seen = [42]
+seenLater.clock.advance(5)
+seenLater.pump()
+check(seenLater.sent.count == 1 && seenLater.skipped == 1 && seenLater.queue.pending.isEmpty,
+      "a message read while Windows was unreachable is dropped on the next attempt")
+
+let seenCatchUp = DeliveryHarness()
+seenCatchUp.seen = [51]
+seenCatchUp.queue.ingest([seenCatchUp.row(50, guid: "cu-a"), seenCatchUp.row(51, guid: "cu-b"), seenCatchUp.row(52, guid: "cu-c")])
+seenCatchUp.clock.advance(601)
+seenCatchUp.pump()
+check(seenCatchUp.catchUpSummaries == ["2 messages arrived while this PC was unreachable"] && seenCatchUp.queue.pending.isEmpty,
+      "catch-up summaries count only rows not already seen, and clear every row")
+
+let sharedSample = SharedSettings(revision: 1_700_000_000_000, includeSenderNames: true, includeMessagePreviews: false,
+                                  suppressOldMessages: true, maximumMessageAgeMinutes: 10, notifyForReactions: false,
+                                  skipReadMessages: true, quietWhileActive: true, activeMinutes: 2)
+let sharedText = "rev=1700000000000;names=1;previews=0;old=1;age=10;reactions=0;read=1;active=1;activemin=2"
+check(sharedSample.encoded() == sharedText, "shared settings encode in the documented order")
+check(SharedSettings.parse(sharedText) == sharedSample, "shared settings round-trip")
+var defaultsAtRevision5 = SharedSettings.defaults
+defaultsAtRevision5.revision = 5
+check(SharedSettings.parse("rev=5;future=9") == defaultsAtRevision5,
+      "unknown shared-settings keys are ignored and missing keys use defaults")
+check(SharedSettings.parse("names=1") == nil && SharedSettings.parse("rev=x") == nil && SharedSettings.parse("rev=1;age") == nil,
+      "shared settings without a revision or with malformed pairs are rejected")
+check(SharedSettings.parse("rev=1;age=99999;activemin=0")?.maximumMessageAgeMinutes == 1440 &&
+      SharedSettings.parse("rev=1;age=99999;activemin=0")?.activeMinutes == 1, "shared settings clamp out-of-range minutes")
+check(SharedSettings.parse("rev=1;" + String(repeating: "x=1;", count: 200)) == nil, "oversized shared settings are rejected")
+check(SharedSettings.responseSignature(token: testToken0, nonce: "123e4567-e89b-12d3-a456-426614174002", encoded: sharedText)
+      == "467902cb72f63cb24a7df57588fbd9c29a3b7626b3aed8836c51c2f427ef550b", "settings response signature matches the protocol vector")
+let settingsCanonical = RelayProtocolV2.canonical(method: "POST", path: "/settings", timestamp: "1700000000",
+                                                  nonce: "123e4567-e89b-12d3-a456-426614174002", kind: .settings,
+                                                  messageID: "", senderBase64: "", previewBase64: sharedText)
+check(RelayHMAC.signature(token: testToken0, canonical: settingsCanonical) == "284b277e830115a39d9c89a696468820655071f5ec5ae3323dccd14ef9354ca9",
+      "settings request signature matches the protocol vector")
+
+let attentionNow = Date(timeIntervalSince1970: 1_700_000_000)
+var quietOnly = SharedSettings.defaults
+quietOnly.skipReadMessages = false
+check(SharedSettings.defaults.shouldSkip(MessageAttention(isRead: true, lastActivity: nil), now: attentionNow), "a read message is skipped")
+check(!quietOnly.shouldSkip(MessageAttention(isRead: true, lastActivity: nil), now: attentionNow), "read messages are sent when that option is off")
+check(quietOnly.shouldSkip(MessageAttention(isRead: false, lastActivity: attentionNow.addingTimeInterval(-60)), now: attentionNow),
+      "recent activity in the conversation keeps it quiet")
+check(!quietOnly.shouldSkip(MessageAttention(isRead: false, lastActivity: attentionNow.addingTimeInterval(-180)), now: attentionNow),
+      "activity older than the quiet window doesn't")
+check(!SharedSettings.defaults.shouldSkip(nil, now: attentionNow), "an unreadable database never drops a message")
+
 let testSuiteName = "local.bubblecast.CoreChecks.\(UUID().uuidString)"
 let testDefaults = UserDefaults(suiteName: testSuiteName)!
 let testTokenStore = FakeTokenStore()
@@ -155,6 +222,9 @@ let settingsSnapshot = RelaySettings(
     maximumMessageAgeMinutes: 12,
     senderNameOverrides: "synthetic = Sender",
     notifyForReactions: true,
+    skipReadMessages: false,
+    quietWhileActive: true,
+    activeMinutes: 7,
     useTLS: true,
     tlsCertificateFingerprint: String(repeating: "A", count: 64)
 )

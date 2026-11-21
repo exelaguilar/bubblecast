@@ -15,6 +15,8 @@ final class MessagesDatabase {
         let hasChatJoin: Bool
         let hasChatDisplayName: Bool
         let hasChatRoomName: Bool
+        let hasIsRead: Bool
+        let hasDateRead: Bool
     }
 
     let path: String
@@ -98,6 +100,48 @@ final class MessagesDatabase {
         return messages
     }
 
+    /// Read state of one message and the user's latest activity in its conversation, looking at that
+    /// conversation's 50 most recent other messages. Read-only, like every query here.
+    func attention(forRowID rowID: Int64) throws -> MessageAttention {
+        let db = try connection()
+        let schema = try currentSchema(db)
+
+        var isRead = false
+        if schema.hasIsRead {
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(db, "SELECT COALESCE(is_read, 0) FROM message WHERE ROWID = ?1", -1, &statement, nil) == SQLITE_OK,
+                  let stmt = statement else { throw failure(db) }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_int64(stmt, 1, rowID)
+            let result = sqlite3_step(stmt)
+            if result == SQLITE_ROW {
+                isRead = sqlite3_column_int(stmt, 0) != 0
+            } else if result != SQLITE_DONE {
+                throw failure(db)
+            }
+        }
+
+        var lastActivity: Date?
+        if schema.hasChatJoin {
+            let readExpression = schema.hasDateRead ? "COALESCE(m.date_read, 0)" : "0"
+            let sql = "SELECT m.is_from_me, COALESCE(m.date, 0), \(readExpression) FROM chat_message_join AS cmj JOIN message AS m ON m.ROWID = cmj.message_id WHERE cmj.chat_id = (SELECT chat_id FROM chat_message_join WHERE message_id = ?1 LIMIT 1) AND cmj.message_id <> ?1 ORDER BY cmj.message_id DESC LIMIT 50"
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK, let stmt = statement else { throw failure(db) }
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_int64(stmt, 1, rowID)
+            var result = sqlite3_step(stmt)
+            while result == SQLITE_ROW {
+                let raw = sqlite3_column_int(stmt, 0) != 0 ? sqlite3_column_double(stmt, 1) : sqlite3_column_double(stmt, 2)
+                if let date = TimestampDecoder.decode(raw)?.date, lastActivity.map({ date > $0 }) ?? true {
+                    lastActivity = date
+                }
+                result = sqlite3_step(stmt)
+            }
+            guard result == SQLITE_DONE else { throw failure(db) }
+        }
+        return MessageAttention(isRead: isRead, lastActivity: lastActivity)
+    }
+
     static func describe(_ error: Error) -> String {
         let code = (error as? ReadError)?.code ?? SQLITE_ERROR
         if code == SQLITE_CANTOPEN || code == SQLITE_AUTH || code == SQLITE_PERM {
@@ -143,7 +187,9 @@ final class MessagesDatabase {
             hasAssociatedType: columnExists("message", "associated_message_type", in: db),
             hasChatJoin: hasChatJoin,
             hasChatDisplayName: hasChatJoin && columnExists("chat", "display_name", in: db),
-            hasChatRoomName: hasChatJoin && columnExists("chat", "room_name", in: db)
+            hasChatRoomName: hasChatJoin && columnExists("chat", "room_name", in: db),
+            hasIsRead: columnExists("message", "is_read", in: db),
+            hasDateRead: columnExists("message", "date_read", in: db)
         )
         schema = loaded
         return loaded

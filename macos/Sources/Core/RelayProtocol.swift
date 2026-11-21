@@ -15,6 +15,8 @@ enum RelayRequestKind: String, Equatable {
     case message
     case test
     case health
+    /// Shares notification settings (`POST /settings`); the settings text takes the preview's place.
+    case settings
 }
 
 enum RelayProtocolV2 {

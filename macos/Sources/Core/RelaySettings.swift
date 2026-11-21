@@ -15,6 +15,10 @@ enum RelayPreferences {
     static let maximumMessageAgeMinutes = "maximumMessageAgeMinutes"
     static let senderNameOverrides = "senderNameOverrides"
     static let notifyForReactions = "notifyForReactions"
+    static let skipReadMessages = "skipReadMessages"
+    static let quietWhileActive = "quietWhileActive"
+    static let activeMinutes = "activeMinutes"
+    static let sharedSettingsRevision = "sharedSettingsRevision"
     static let useTLS = "useTLS"
     static let tlsCertificateFingerprint = "tlsCertificateFingerprint"
     static let lastDeliveredIncomingMessageRowID = "lastDeliveredIncomingMessageRowID"
@@ -23,6 +27,7 @@ enum RelayPreferences {
     static let duplicateMessageCount = "duplicateMessageCount"
     static let catchUpSummaryCount = "catchUpSummaryCount"
     static let cursorRebaselineCount = "cursorRebaselineCount"
+    static let skippedSeenCount = "skippedSeenCount"
     static let lastSuccessfulNotification = "lastSuccessfulNotification"
 }
 
@@ -35,6 +40,9 @@ struct RelaySettings: Equatable {
     let maximumMessageAgeMinutes: Int
     let senderNameOverrides: String
     let notifyForReactions: Bool
+    let skipReadMessages: Bool
+    let quietWhileActive: Bool
+    let activeMinutes: Int
     let useTLS: Bool
     let tlsCertificateFingerprint: String
 
@@ -50,6 +58,9 @@ struct RelaySettings: Equatable {
             maximumMessageAgeMinutes: max(1, min(1440, defaults.object(forKey: RelayPreferences.maximumMessageAgeMinutes) as? Int ?? 10)),
             senderNameOverrides: defaults.string(forKey: RelayPreferences.senderNameOverrides) ?? "",
             notifyForReactions: defaults.object(forKey: RelayPreferences.notifyForReactions) as? Bool ?? false,
+            skipReadMessages: defaults.object(forKey: RelayPreferences.skipReadMessages) as? Bool ?? SharedSettings.defaults.skipReadMessages,
+            quietWhileActive: defaults.object(forKey: RelayPreferences.quietWhileActive) as? Bool ?? SharedSettings.defaults.quietWhileActive,
+            activeMinutes: max(1, min(60, defaults.object(forKey: RelayPreferences.activeMinutes) as? Int ?? SharedSettings.defaults.activeMinutes)),
             useTLS: defaults.object(forKey: RelayPreferences.useTLS) as? Bool ?? true,
             tlsCertificateFingerprint: defaults.string(forKey: RelayPreferences.tlsCertificateFingerprint) ?? ""
         )
@@ -58,14 +69,52 @@ struct RelaySettings: Equatable {
     func save(to defaults: UserDefaults = .standard, tokenStore: PairingTokenStore = KeychainTokenStore()) throws {
         try tokenStore.writeToken(pairingToken)
         defaults.set(windowsAddress, forKey: RelayPreferences.windowsAddress)
+        defaults.set(senderNameOverrides, forKey: RelayPreferences.senderNameOverrides)
+        saveShared(to: defaults)
+        defaults.set(useTLS, forKey: RelayPreferences.useTLS)
+        defaults.set(tlsCertificateFingerprint, forKey: RelayPreferences.tlsCertificateFingerprint)
+    }
+
+    /// Writes only the settings shared with Windows; the Keychain token is untouched.
+    func saveShared(to defaults: UserDefaults = .standard) {
         defaults.set(includeSenderNames, forKey: RelayPreferences.includeSenderNames)
         defaults.set(includeMessagePreviews, forKey: RelayPreferences.includeMessagePreviews)
         defaults.set(suppressOldMessages, forKey: RelayPreferences.suppressOldMessages)
         defaults.set(maximumMessageAgeMinutes, forKey: RelayPreferences.maximumMessageAgeMinutes)
-        defaults.set(senderNameOverrides, forKey: RelayPreferences.senderNameOverrides)
         defaults.set(notifyForReactions, forKey: RelayPreferences.notifyForReactions)
-        defaults.set(useTLS, forKey: RelayPreferences.useTLS)
-        defaults.set(tlsCertificateFingerprint, forKey: RelayPreferences.tlsCertificateFingerprint)
+        defaults.set(skipReadMessages, forKey: RelayPreferences.skipReadMessages)
+        defaults.set(quietWhileActive, forKey: RelayPreferences.quietWhileActive)
+        defaults.set(activeMinutes, forKey: RelayPreferences.activeMinutes)
+    }
+
+    /// The shared portion, stamped with `revision`.
+    func shared(revision: Int64) -> SharedSettings {
+        SharedSettings(revision: revision,
+                       includeSenderNames: includeSenderNames,
+                       includeMessagePreviews: includeMessagePreviews,
+                       suppressOldMessages: suppressOldMessages,
+                       maximumMessageAgeMinutes: maximumMessageAgeMinutes,
+                       notifyForReactions: notifyForReactions,
+                       skipReadMessages: skipReadMessages,
+                       quietWhileActive: quietWhileActive,
+                       activeMinutes: activeMinutes)
+    }
+
+    /// These settings with the shared portion replaced.
+    func applying(_ shared: SharedSettings) -> RelaySettings {
+        RelaySettings(windowsAddress: windowsAddress,
+                      pairingToken: pairingToken,
+                      includeSenderNames: shared.includeSenderNames,
+                      includeMessagePreviews: shared.includeMessagePreviews,
+                      suppressOldMessages: shared.suppressOldMessages,
+                      maximumMessageAgeMinutes: shared.maximumMessageAgeMinutes,
+                      senderNameOverrides: senderNameOverrides,
+                      notifyForReactions: shared.notifyForReactions,
+                      skipReadMessages: shared.skipReadMessages,
+                      quietWhileActive: shared.quietWhileActive,
+                      activeMinutes: shared.activeMinutes,
+                      useTLS: useTLS,
+                      tlsCertificateFingerprint: tlsCertificateFingerprint)
     }
 }
 

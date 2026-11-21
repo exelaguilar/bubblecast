@@ -29,6 +29,7 @@ if [ "$MODE" = "test" ]; then
         "$SOURCE_DIR/Tests/CoreChecks.swift" \
         "$SOURCE_DIR/Sources/Core/KeychainTokenStore.swift" \
         "$SOURCE_DIR/Sources/Core/RelaySettings.swift" \
+        "$SOURCE_DIR/Sources/Core/SharedSettings.swift" \
         "$SOURCE_DIR/Sources/Core/RelayProtocol.swift" \
         "$SOURCE_DIR/Sources/Core/TimestampDecoder.swift" \
         "$SOURCE_DIR/Sources/Core/DeliveryQueue.swift"

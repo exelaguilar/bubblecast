@@ -55,7 +55,10 @@ Bubblecast on Windows announces itself as `_bubblecast._tcp` on the local networ
 - **Message previews** include the message text (up to 180 characters). Previews may appear in Windows notification history.
 - **Ignore old or iCloud-synced messages** skips rows older than **Maximum message age** (default 10 minutes) and rows with unreadable timestamps. Turn it off only to deliver a backlog.
 - **Include associated-message rows** is off by default. These rows can include reactions; Apple doesn't document their types, so they get a generic label when they have no text.
+- **Skip messages I've already read** (on by default) checks just before sending whether the message is marked read — on the Mac, or on another device through iCloud — and drops it. Because new messages are sent within seconds, this mostly catches messages that waited while Windows was unreachable. A conversation left open in Messages on the Mac counts as read, so keep Messages on no conversation (or closed) in a headless VM.
+- **Stay quiet while I'm active in a chat** (on by default) drops alerts for a conversation you sent a message in, or read a message in, during the last few minutes (**Quiet for**, 2 by default, 1–60). It looks at the conversation's 50 most recent messages.
 - Group chats show the group's name when Messages provides one. System rows are ignored.
+- The notification settings above (everything except the overrides) can also be changed on Windows, on the **Mac** page of its Settings. The most recent change wins: the Mac picks up a change made on Windows within about a minute (its regular check-in), and Windows gets a change saved on the Mac right away. The line at the bottom of the Notifications card shows whether sharing is working. It needs Bubblecast 1.2 or later on Windows.
 - Settings take effect when you click **Save**. Save, Send test, and an unsaved-changes indicator stay in the footer. The window follows the system light/dark appearance.
 
 ## Delivery behavior
@@ -64,6 +67,7 @@ Bubblecast on Windows announces itself as `_bubblecast._tcp` on the local networ
 - If Windows is unreachable, messages wait and retry with backoff. Messages that were fresh when first read but wait longer than the maximum age are delivered as one count-only catch-up alert once Windows is reachable again.
 - If Windows rejects a request (wrong token or clock skew), delivery pauses and the reason is shown in the status card.
 - Duplicate rows are suppressed by message ID on both sides.
+- Messages skipped as already read or active elsewhere are counted under Advanced → Diagnostics (**Skipped as seen**). The read check needs Messages' read state to have synced to the Mac; when the database can't be read, the message is sent.
 
 ## Start at login on a headless VM
 

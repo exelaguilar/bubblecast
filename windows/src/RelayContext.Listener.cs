@@ -220,23 +220,35 @@ namespace Bubblecast
             {
                 string[] parts = parsed.RequestLine.Split(new char[] { ' ' }, 3);
                 if (parts.Length >= 2 &&
-                    ((parts[0] == "POST" && parts[1] == "/notify") || (parts[0] == "GET" && parts[1] == "/health")))
+                    ((parts[0] == "POST" && parts[1] == "/notify") || (parts[0] == "GET" && parts[1] == "/health") ||
+                     (parts[0] == "POST" && parts[1] == "/settings")))
                 {
                     string path = parts[1];
                     string senderBase64;
                     string previewBase64;
                     if (!parsed.Headers.TryGetValue("X-Sender-Base64", out senderBase64)) senderBase64 = "";
-                    if (!parsed.Headers.TryGetValue("X-Preview-Base64", out previewBase64)) previewBase64 = "";
+                    // For /settings, the settings text is signed in the preview's place (see docs/PROTOCOL.md).
+                    if (!parsed.Headers.TryGetValue(path == "/settings" ? "X-Relay-Settings" : "X-Preview-Base64", out previewBase64)) previewBase64 = "";
+                    if (path == "/settings") senderBase64 = "";
                     RequestVerification verdict = _verifier.Verify(parts[0], path, parsed.Headers, senderBase64, previewBase64);
                     string errorCode = verdict.ErrorCode;
+                    string settingsHeaders = null;
                     if (!verdict.Accepted)
                     {
                         status = "403 Forbidden";
                         RecordRejection(verdict.Rejection);
                     }
+                    else if (path == "/settings" && !ReceiveSharedSettings(previewBase64))
+                    {
+                        status = "400 Bad Request";
+                        RecordRejection(RequestRejectionReason.Malformed);
+                    }
                     else
                     {
                         status = "204 No Content";
+                        string nonce;
+                        if (parsed.Headers.TryGetValue("X-Relay-Nonce", out nonce))
+                            settingsHeaders = SignedSharedSettingsHeaders(nonce);
                         RecordAcceptedRequest(path);
                         IPEndPoint remote = client.Client.RemoteEndPoint as IPEndPoint;
                         if (remote != null && remote.Address.AddressFamily == AddressFamily.InterNetwork)
@@ -244,7 +256,7 @@ namespace Bubblecast
                         if (path == "/notify" && !verdict.DuplicateMessage)
                             QueueToast(DecodeHeader(senderBase64, 80), DecodeHeader(previewBase64, 180), verdict.Kind == "test");
                     }
-                    WriteResponse(stream, status, errorCode);
+                    WriteResponse(stream, status, errorCode, settingsHeaders);
                     return;
                 }
             }
@@ -254,10 +266,11 @@ namespace Bubblecast
 
         private static readonly string ServerVersion = Assembly.GetExecutingAssembly().GetName().Version.ToString(3);
 
-        private static void WriteResponse(Stream stream, string status, string errorCode = null)
+        private static void WriteResponse(Stream stream, string status, string errorCode = null, string extraHeaders = null)
         {
             string headers = "HTTP/1.1 " + status + "\r\nX-Relay-Server-Version: " + ServerVersion + "\r\n";
             if (!String.IsNullOrEmpty(errorCode)) headers += "X-Relay-Error: " + errorCode + "\r\n";
+            if (!String.IsNullOrEmpty(extraHeaders)) headers += extraHeaders;
             byte[] response = Encoding.ASCII.GetBytes(headers + "Content-Length: 0\r\nConnection: close\r\n\r\n");
             stream.Write(response, 0, response.Length);
             stream.Flush();
@@ -267,7 +280,11 @@ namespace Bubblecast
         {
             long now = DateTime.UtcNow.Ticks;
             Interlocked.Exchange(ref _lastSignedRequestUtcTicks, now);
-            if (path == "/notify")
+            if (path == "/settings")
+            {
+                // Settings arrive alongside health checks; only the last-seen time matters.
+            }
+            else if (path == "/notify")
             {
                 Interlocked.Increment(ref _notificationsReceived);
                 Interlocked.Exchange(ref _lastNotificationUtcTicks, now);

@@ -23,6 +23,9 @@ final class RelayModel: ObservableObject {
     @Published var maximumMessageAgeMinutes: Int { didSet { updateUnsavedChanges() } }
     @Published var senderNameOverrides: String { didSet { updateUnsavedChanges() } }
     @Published var notifyForReactions: Bool { didSet { updateUnsavedChanges() } }
+    @Published var skipReadMessages: Bool { didSet { updateUnsavedChanges() } }
+    @Published var quietWhileActive: Bool { didSet { updateUnsavedChanges() } }
+    @Published var activeMinutes: Int { didSet { updateUnsavedChanges() } }
     @Published var useTLS: Bool { didSet { updateUnsavedChanges() } }
     @Published var tlsCertificateFingerprint: String { didSet { updateUnsavedChanges() } }
     @Published private(set) var hasUnsavedChanges = false
@@ -37,6 +40,9 @@ final class RelayModel: ObservableObject {
     @Published private(set) var duplicateMessageCount: Int
     @Published private(set) var catchUpSummaryCount: Int
     @Published private(set) var cursorRebaselineCount: Int
+    @Published private(set) var skippedSeenCount: Int
+    /// Whether the notification settings are being shared with Windows.
+    @Published private(set) var sharingStatus = "Not checked yet"
     @Published private(set) var lastSuccessfulNotification: Date?
     @Published private(set) var contactLookupSummary = "Not checked yet"
     @Published private(set) var timestampUnitSummary = "not observed"
@@ -68,6 +74,10 @@ final class RelayModel: ObservableObject {
     private var duplicateTotal: Int
     private var catchUpTotal: Int
     private var rebaselineTotal: Int
+    private var skippedSeenTotal: Int
+    /// Revision of the shared settings this Mac has (see `SharedSettings`).
+    private var sharedRevision: Int64
+    private var sharingPushInFlight = false
 
     private init() {
         let loadedSettings = RelaySettings.load()
@@ -81,6 +91,9 @@ final class RelayModel: ObservableObject {
         maximumMessageAgeMinutes = loadedSettings.maximumMessageAgeMinutes
         senderNameOverrides = loadedSettings.senderNameOverrides
         notifyForReactions = loadedSettings.notifyForReactions
+        skipReadMessages = loadedSettings.skipReadMessages
+        quietWhileActive = loadedSettings.quietWhileActive
+        activeMinutes = loadedSettings.activeMinutes
         useTLS = loadedSettings.useTLS
         tlsCertificateFingerprint = loadedSettings.tlsCertificateFingerprint
 
@@ -89,14 +102,21 @@ final class RelayModel: ObservableObject {
         let duplicates = standard.integer(forKey: RelayPreferences.duplicateMessageCount)
         let catchUp = standard.integer(forKey: RelayPreferences.catchUpSummaryCount)
         let rebaselines = standard.integer(forKey: RelayPreferences.cursorRebaselineCount)
+        let skippedSeen = standard.integer(forKey: RelayPreferences.skippedSeenCount)
+        // Settings saved before sharing existed count as revision 1: older than any edit, but newer
+        // than a PC that has never received them, so the Mac's existing choices seed Windows.
+        let storedRevision = (standard.object(forKey: RelayPreferences.sharedSettingsRevision) as? NSNumber)?.int64Value ?? 1
         suppressedOldTotal = suppressed
         duplicateTotal = duplicates
         catchUpTotal = catchUp
         rebaselineTotal = rebaselines
+        skippedSeenTotal = skippedSeen
+        sharedRevision = max(1, storedRevision)
         suppressedOldMessageCount = suppressed
         duplicateMessageCount = duplicates
         catchUpSummaryCount = catchUp
         cursorRebaselineCount = rebaselines
+        skippedSeenCount = skippedSeen
         lastSuccessfulNotification = standard.object(forKey: RelayPreferences.lastSuccessfulNotification) as? Date
 
         let path = (NSHomeDirectory() as NSString).appendingPathComponent("Library/Messages/chat.db")
@@ -124,8 +144,25 @@ final class RelayModel: ObservableObject {
             let total = self.duplicateTotal
             DispatchQueue.main.async { self.duplicateMessageCount = total }
         }
+        delivery.shouldSkip = { [weak self] row in
+            guard let self else { return false }
+            let shared = self.settings.shared(revision: 0)
+            guard shared.skipReadMessages || shared.quietWhileActive else { return false }
+            return shared.shouldSkip(try? self.database.attention(forRowID: row.rowID))
+        }
+        delivery.onSkipped = { [weak self] in
+            guard let self else { return }
+            self.skippedSeenTotal += 1
+            self.defaults.set(self.skippedSeenTotal, forKey: RelayPreferences.skippedSeenCount)
+            let total = self.skippedSeenTotal
+            DispatchQueue.main.async { self.skippedSeenCount = total }
+            self.setStatus("Skipped a message you've already seen or are replying to elsewhere.", level: .ok)
+        }
         contacts.onSummary = { [weak self] summary in
             DispatchQueue.main.async { self?.contactLookupSummary = summary }
+        }
+        client.onSharedSettings = { [weak self] text in
+            self?.queue.async { self?.receiveSharedSettings(text) }
         }
     }
 
@@ -175,6 +212,7 @@ final class RelayModel: ObservableObject {
         windowsAddress = windowsAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         pairingToken = pairingToken.trimmingCharacters(in: .whitespacesAndNewlines)
         maximumMessageAgeMinutes = max(1, min(1440, maximumMessageAgeMinutes))
+        activeMinutes = max(1, min(60, activeMinutes))
         guard windowsAddress.isEmpty || WindowsRelayEndpoint.url(address: windowsAddress, path: "/health") != nil else {
             addressError = "Enter a host name, IPv4 address, or bracketed IPv6 address. The relay uses port 8765."
             setStatus("Windows address is invalid.", level: .error)
@@ -182,6 +220,7 @@ final class RelayModel: ObservableObject {
         }
         addressError = windowsAddress.isEmpty ? "Enter the Windows PC address to check its status or send alerts." : nil
         let snapshot = makeSettingsFromDraft()
+        let sharedChanged = savedSettingsForUI.map { !$0.shared(revision: 0).sameValues(as: snapshot.shared(revision: 0)) } ?? true
         do {
             try snapshot.save()
         } catch {
@@ -198,6 +237,7 @@ final class RelayModel: ObservableObject {
             self.contacts.reset()
             self.client.reset()
             self.cancelRetry()
+            if sharedChanged { self.setSharedRevision(max(SharedSettings.now(), self.sharedRevision + 1)) }
             self.pumpDelivery()
             self.checkWindowsHealth()
         }
@@ -274,8 +314,10 @@ final class RelayModel: ObservableObject {
             self.duplicateTotal = 0
             self.catchUpTotal = 0
             self.rebaselineTotal = 0
+            self.skippedSeenTotal = 0
             for key in [RelayPreferences.suppressedOldMessageCount, RelayPreferences.duplicateMessageCount,
-                        RelayPreferences.catchUpSummaryCount, RelayPreferences.cursorRebaselineCount] {
+                        RelayPreferences.catchUpSummaryCount, RelayPreferences.cursorRebaselineCount,
+                        RelayPreferences.skippedSeenCount] {
                 self.defaults.set(0, forKey: key)
             }
             DispatchQueue.main.async {
@@ -283,6 +325,7 @@ final class RelayModel: ObservableObject {
                 self.duplicateMessageCount = 0
                 self.catchUpSummaryCount = 0
                 self.cursorRebaselineCount = 0
+                self.skippedSeenCount = 0
             }
         }
     }
@@ -302,6 +345,10 @@ final class RelayModel: ObservableObject {
             "Sender-name setting: \(includeSenderNames ? "on" : "off")",
             "Message-preview setting: \(includeMessagePreviews ? "on" : "off")",
             "Pinned TLS: \(useTLS ? "on" : "off")",
+            "Skip already-read messages: \(skipReadMessages ? "on" : "off")",
+            "Quiet while active elsewhere: \(quietWhileActive ? "on (\(activeMinutes) minutes)" : "off")",
+            "Messages skipped as already seen: \(skippedSeenCount)",
+            "Settings sharing: \(sharingStatus)",
             "Contact lookup: \(contactLookupSummary)"
         ].joined(separator: "\n")
         NSPasteboard.general.clearContents()
@@ -346,6 +393,9 @@ final class RelayModel: ObservableObject {
             maximumMessageAgeMinutes: max(1, min(1440, maximumMessageAgeMinutes)),
             senderNameOverrides: senderNameOverrides,
             notifyForReactions: notifyForReactions,
+            skipReadMessages: skipReadMessages,
+            quietWhileActive: quietWhileActive,
+            activeMinutes: max(1, min(60, activeMinutes)),
             useTLS: useTLS,
             tlsCertificateFingerprint: tlsCertificateFingerprint.trimmingCharacters(in: .whitespacesAndNewlines)
         )
@@ -470,6 +520,71 @@ final class RelayModel: ObservableObject {
         DispatchQueue.main.async { self.timestampUnitSummary = summary }
     }
 
+    // MARK: - Shared settings (queue)
+
+    private func setSharedRevision(_ revision: Int64) {
+        sharedRevision = revision
+        defaults.set(NSNumber(value: revision), forKey: RelayPreferences.sharedSettingsRevision)
+    }
+
+    /// Windows returned its copy of the shared settings. The newer revision wins.
+    private func receiveSharedSettings(_ text: String) {
+        guard let remote = SharedSettings.parse(text) else { return }
+        if remote.revision > sharedRevision {
+            let updated = settings.applying(remote)
+            updated.saveShared(to: defaults)
+            setSharedRevision(remote.revision)
+            settings = updated
+            delivery.suppressOldMessages = updated.suppressOldMessages
+            delivery.maximumAge = TimeInterval(updated.maximumMessageAgeMinutes * 60)
+            delivery.clearResolvedNames()
+            DispatchQueue.main.async {
+                self.adoptSharedSettings(remote)
+                self.sharingStatus = "Shared with Windows"
+            }
+            setStatus("Notification settings updated from Windows.", level: .ok)
+            pumpDelivery()
+        } else if remote.revision < sharedRevision {
+            pushSharedSettings()
+        } else {
+            DispatchQueue.main.async { self.sharingStatus = "Shared with Windows" }
+        }
+    }
+
+    /// Sends this Mac's shared settings to Windows; one request at a time.
+    private func pushSharedSettings() {
+        guard !sharingPushInFlight, !settings.windowsAddress.isEmpty else { return }
+        sharingPushInFlight = true
+        let text = settings.shared(revision: sharedRevision).encoded()
+        client.send(path: "/settings", method: "POST", settingsText: text, kind: .settings,
+                    configuration: RelayEndpointConfiguration(settings: settings)) { [weak self] outcome, _ in
+            self?.queue.async {
+                guard let self else { return }
+                self.sharingPushInFlight = false
+                if outcome == .notFound {
+                    DispatchQueue.main.async { self.sharingStatus = "Update Bubblecast on Windows to 1.2 to change these there" }
+                }
+            }
+        }
+    }
+
+    /// Main thread: takes Windows' values for every shared setting the user isn't in the middle of editing.
+    private func adoptSharedSettings(_ remote: SharedSettings) {
+        guard let saved = savedSettingsForUI else { return }
+        let updated = saved.applying(remote)
+        savedSettingsForUI = updated
+        if includeSenderNames == saved.includeSenderNames { includeSenderNames = updated.includeSenderNames }
+        if includeMessagePreviews == saved.includeMessagePreviews { includeMessagePreviews = updated.includeMessagePreviews }
+        if suppressOldMessages == saved.suppressOldMessages { suppressOldMessages = updated.suppressOldMessages }
+        if maximumMessageAgeMinutes == saved.maximumMessageAgeMinutes { maximumMessageAgeMinutes = updated.maximumMessageAgeMinutes }
+        if notifyForReactions == saved.notifyForReactions { notifyForReactions = updated.notifyForReactions }
+        if skipReadMessages == saved.skipReadMessages { skipReadMessages = updated.skipReadMessages }
+        if quietWhileActive == saved.quietWhileActive { quietWhileActive = updated.quietWhileActive }
+        if activeMinutes == saved.activeMinutes { activeMinutes = updated.activeMinutes }
+        updateUnsavedChanges()
+        if updated.includeSenderNames && !saved.includeSenderNames { requestContactsAccessIfNeeded(enabled: true) }
+    }
+
     // MARK: - Contacts and health
 
     private func requestContactsAccessIfNeeded(enabled: Bool) {
@@ -508,6 +623,9 @@ final class RelayModel: ObservableObject {
                 guard let self else { return }
                 switch outcome {
                 case .delivered:
+                    if self.sharingStatus == "Not checked yet" {
+                        self.sharingStatus = "Windows doesn't share settings (update it to 1.2)"
+                    }
                     self.windowsHealth = "Paired ✓ — Windows accepted the health check"
                     self.windowsHealthLevel = .ok
                 case .rejected:

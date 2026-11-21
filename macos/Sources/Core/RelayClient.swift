@@ -18,6 +18,9 @@ struct RelayEndpointConfiguration: Equatable {
 /// Builds and sends signed protocol v2 requests. Pinned-TLS requests share one URL session per
 /// certificate fingerprint instead of creating a session for every request. Thread-safe.
 final class RelayClient {
+    /// Called (on a URL session queue) with the settings text from a correctly signed response.
+    var onSharedSettings: ((String) -> Void)?
+
     private let lock = NSLock()
     private var pinnedSession: URLSession?
     private var pinnedFingerprint = ""
@@ -26,6 +29,7 @@ final class RelayClient {
               method: String,
               sender: String = "",
               preview: String = "",
+              settingsText: String = "",
               kind: RelayRequestKind,
               messageIdentity: String = "",
               configuration: RelayEndpointConfiguration,
@@ -34,14 +38,23 @@ final class RelayClient {
             completion(.transient, "save once to learn the Windows TLS certificate, or paste its fingerprint")
             return
         }
-        guard let request = makeRequest(path: path, method: method, sender: sender, preview: preview, kind: kind,
-                                        messageIdentity: messageIdentity, configuration: configuration) else {
+        guard let built = makeRequest(path: path, method: method, sender: sender, preview: preview,
+                                      settingsText: settingsText, kind: kind,
+                                      messageIdentity: messageIdentity, configuration: configuration) else {
             completion(.transient, "enter a valid Windows host name/IP and pairing token")
             return
         }
+        let (request, nonce) = built
         let session = configuration.useTLS ? pinnedSession(for: configuration.fingerprint) : URLSession.shared
-        session.dataTask(with: request) { _, response, error in
+        let token = configuration.token
+        session.dataTask(with: request) { [weak self] _, response, error in
             let result = Self.interpret(response: response, error: error)
+            if result.0 == .delivered, let http = response as? HTTPURLResponse,
+               let text = http.value(forHTTPHeaderField: "X-Relay-Settings"),
+               let signature = http.value(forHTTPHeaderField: "X-Relay-Settings-Signature"),
+               signature.lowercased() == SharedSettings.responseSignature(token: token, nonce: nonce, encoded: text) {
+                self?.onSharedSettings?(text)
+            }
             completion(result.0, result.1)
         }.resume()
     }
@@ -51,8 +64,8 @@ final class RelayClient {
     func learnFingerprint(configuration: RelayEndpointConfiguration,
                           completion: @escaping (_ fingerprint: String?, _ outcome: DeliveryOutcome, _ reason: String) -> Void) {
         let learning = RelayEndpointConfiguration(address: configuration.address, token: configuration.token, useTLS: true, fingerprint: "")
-        guard let request = makeRequest(path: "/health", method: "GET", sender: "", preview: "", kind: .health,
-                                        messageIdentity: "", configuration: learning) else {
+        guard let request = makeRequest(path: "/health", method: "GET", sender: "", preview: "", settingsText: "",
+                                        kind: .health, messageIdentity: "", configuration: learning)?.0 else {
             completion(nil, .transient, "enter a valid Windows host name/IP and pairing token")
             return
         }
@@ -76,15 +89,18 @@ final class RelayClient {
         pinnedFingerprint = ""
     }
 
-    private func makeRequest(path: String, method: String, sender: String, preview: String, kind: RelayRequestKind,
-                             messageIdentity: String, configuration: RelayEndpointConfiguration) -> URLRequest? {
+    /// Builds a signed request and returns it with its nonce, which the settings response is bound to.
+    private func makeRequest(path: String, method: String, sender: String, preview: String, settingsText: String,
+                             kind: RelayRequestKind, messageIdentity: String,
+                             configuration: RelayEndpointConfiguration) -> (URLRequest, String)? {
         guard !configuration.token.isEmpty,
               let url = WindowsRelayEndpoint.url(address: configuration.address, path: path, useTLS: configuration.useTLS) else { return nil }
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.timeoutInterval = 5
         let senderBase64 = sender.isEmpty ? "" : Data(sender.utf8).base64EncodedString()
-        let previewBase64 = preview.isEmpty ? "" : Data(preview.utf8).base64EncodedString()
+        // For `settings`, the settings text is signed in the preview's place and sent in its own header.
+        let previewBase64 = kind == .settings ? settingsText : (preview.isEmpty ? "" : Data(preview.utf8).base64EncodedString())
         let timestamp = String(Int(Date().timeIntervalSince1970))
         let nonce = UUID().uuidString.lowercased()
         let messageID = kind == .message ? RelayProtocolV2.messageID(token: configuration.token, guid: messageIdentity) : ""
@@ -97,8 +113,12 @@ final class RelayClient {
         request.setValue(nonce, forHTTPHeaderField: "X-Relay-Nonce")
         request.setValue(RelayHMAC.signature(token: configuration.token, canonical: canonical), forHTTPHeaderField: "X-Relay-Signature")
         if !senderBase64.isEmpty { request.setValue(senderBase64, forHTTPHeaderField: "X-Sender-Base64") }
-        if !previewBase64.isEmpty { request.setValue(previewBase64, forHTTPHeaderField: "X-Preview-Base64") }
-        return request
+        if kind == .settings {
+            request.setValue(settingsText, forHTTPHeaderField: "X-Relay-Settings")
+        } else if !previewBase64.isEmpty {
+            request.setValue(previewBase64, forHTTPHeaderField: "X-Preview-Base64")
+        }
+        return (request, nonce)
     }
 
     private static func interpret(response: URLResponse?, error: Error?) -> (DeliveryOutcome, String) {

@@ -39,7 +39,8 @@ No Apple ID sharing. No cloud relay. No account. Just two small native apps talk
 | ⚡ **Instant** | The Mac reacts the moment Messages writes a new message; bursts are batched into one tidy notification. |
 | 🔒 **Private by design** | LAN only, no cloud. Every request is HMAC-SHA256 signed with replay protection, and TLS pinned to your PC's certificate is on by default. |
 | 👀 **Read-only** | The Mac app only *reads* the Messages database. It never sends, replies, or modifies anything. |
-| 🧠 **Smart filtering** | Skips old and iCloud-synced backlog, de-duplicates, names group chats, and sends one catch-up summary after the PC was offline. |
+| 🧠 **Smart filtering** | Skips messages you've already read, stays quiet while you're texting from your phone, skips old and iCloud-synced backlog, de-duplicates, and sends one catch-up summary after the PC was offline. |
+| 🎛️ **Set it up from Windows** | The Mac's notification settings are on a **Mac** page in Windows Settings too, so you rarely need to open the Mac at all. |
 | 🙋 **Real names** | Shows the sender from your Contacts, or from your own `address = name` overrides. Previews are opt-in. |
 | 🔎 **Zero-typing pairing** | Windows announces itself on your network; the Mac lists it, you click **Use**, paste the token, and compare one fingerprint. |
 | 🌙 **Quiet hours & mutes** | Silence notifications overnight or mute specific senders on Windows. |

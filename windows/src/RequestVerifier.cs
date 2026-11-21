@@ -124,9 +124,10 @@ namespace Bubblecast
                 !Int64.TryParse(timestampText, NumberStyles.Integer, CultureInfo.InvariantCulture, out timestamp) ||
                 !Guid.TryParse(nonce, out parsedNonce) || suppliedSignature.Length != 64)
                 return Reject(result, RequestRejectionReason.Malformed);
-            if ((kind != "message" && kind != "test" && kind != "health") ||
+            if ((kind != "message" && kind != "test" && kind != "health" && kind != "settings") ||
                 (path == "/health" && kind != "health") ||
-                (path == "/notify" && kind == "health") ||
+                (path == "/notify" && kind != "message" && kind != "test") ||
+                (path == "/settings" && kind != "settings") ||
                 (kind == "message" && !IsOpaqueMessageId(messageId)) ||
                 (kind != "message" && messageId.Length != 0))
                 return Reject(result, RequestRejectionReason.Malformed);
