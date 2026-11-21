@@ -365,14 +365,17 @@ namespace Bubblecast
             RelaySwitch macQuietActive = new RelaySwitch();
             UiLayout.AddRow(quietCard, UiLayout.ActionRow("Stay quiet while I'm active in a chat", "No alert for a conversation you sent or read a message in recently, on any of your devices.", macQuietActive, labelFont, smallFont));
             TextBox macActiveMinutes = new TextBox { MaxLength = 2, TextAlign = HorizontalAlignment.Center, AccessibleName = "Minutes to stay quiet after activity in a conversation" };
-            UiLayout.AddRow(quietCard, MinutesRow("For", macActiveMinutes, "minutes after you were active", baseFont));
+            FieldHost macActiveMinutesHost;
+            UiLayout.AddRow(quietCard, MinutesRow("For", macActiveMinutes, "minutes after you were active", baseFont, out macActiveMinutesHost));
             UiLayout.AddSeparator(quietCard);
             RelaySwitch macSkipOld = new RelaySwitch();
             UiLayout.AddRow(quietCard, UiLayout.ActionRow("Ignore old or iCloud-synced messages", "Older or unreadable timestamps are skipped. Turn this off only to catch up on the full backlog.", macSkipOld, labelFont, smallFont));
             TextBox macMaximumAge = new TextBox { MaxLength = 4, TextAlign = HorizontalAlignment.Center, AccessibleName = "Maximum message age in minutes" };
-            UiLayout.AddRow(quietCard, MinutesRow("Older than", macMaximumAge, "minutes", baseFont));
+            FieldHost macMaximumAgeHost;
+            UiLayout.AddRow(quietCard, MinutesRow("Older than", macMaximumAge, "minutes", baseFont, out macMaximumAgeHost));
 
             Control[] sharedControls = { macNames, macPreviews, macReactions, macSkipRead, macQuietActive, macActiveMinutes, macSkipOld, macMaximumAge };
+            RelaySwitch[] sharedSwitches = { macNames, macPreviews, macReactions, macSkipRead, macQuietActive, macSkipOld };
             Action<SharedSettings> showShared = delegate(SharedSettings values)
             {
                 applyingShared = true;
@@ -385,14 +388,14 @@ namespace Bubblecast
                 macSkipOld.Checked = values.SuppressOldMessages;
                 macMaximumAge.Text = values.MaximumMessageAgeMinutes.ToString(CultureInfo.InvariantCulture);
                 bool available = CurrentSharedSettings() != null;
-                foreach (Control control in sharedControls) control.Enabled = available;
-                macActiveMinutes.Enabled = available && values.QuietWhileActive;
-                macMaximumAge.Enabled = available && values.SuppressOldMessages;
+                foreach (RelaySwitch toggle in sharedSwitches) toggle.Enabled = available;
+                macActiveMinutesHost.Dimmed = !(available && values.QuietWhileActive);
+                macMaximumAgeHost.Dimmed = !(available && values.SuppressOldMessages);
                 applyingShared = false;
             };
             showShared(sharedAtOpen);
-            macQuietActive.CheckedChanged += delegate { macActiveMinutes.Enabled = macQuietActive.Enabled && macQuietActive.Checked; };
-            macSkipOld.CheckedChanged += delegate { macMaximumAge.Enabled = macSkipOld.Enabled && macSkipOld.Checked; };
+            macQuietActive.CheckedChanged += delegate { macActiveMinutesHost.Dimmed = !(macQuietActive.Enabled && macQuietActive.Checked); };
+            macSkipOld.CheckedChanged += delegate { macMaximumAgeHost.Dimmed = !(macSkipOld.Enabled && macSkipOld.Checked); };
 
             // ── Footer: live receiver status and the persistent Save action ──
             Panel footer = new Panel { Dock = DockStyle.Bottom, Height = 64, Tag = UiRole.Surface };
@@ -660,7 +663,7 @@ namespace Bubblecast
         }
 
         /// <summary>A "label [number] unit" row, indented under the switch it belongs to.</summary>
-        private static TableLayoutPanel MinutesRow(string label, TextBox input, string unit, Font font)
+        private static TableLayoutPanel MinutesRow(string label, TextBox input, string unit, Font font, out FieldHost host)
         {
             TableLayoutPanel row = new TableLayoutPanel { ColumnCount = 4, RowCount = 1, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Margin = new Padding(0, 0, 0, 12), Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top };
             for (int column = 0; column < 3; column++) row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -670,8 +673,7 @@ namespace Bubblecast
             Label after = UiLayout.MakeText(unit, UiRole.Muted, font, new Padding(8, 0, 0, 0));
             before.Anchor = AnchorStyles.Left;
             after.Anchor = AnchorStyles.Left;
-            FieldHost host = new FieldHost(input, 1) { PreferredWidth = 64, Anchor = AnchorStyles.Left };
-            input.EnabledChanged += delegate { host.Invalidate(); before.Enabled = input.Enabled; after.Enabled = input.Enabled; };
+            host = new FieldHost(input, 1) { PreferredWidth = 64, Anchor = AnchorStyles.Left };
             row.Controls.Add(before, 0, 0);
             row.Controls.Add(host, 1, 0);
             row.Controls.Add(after, 2, 0);

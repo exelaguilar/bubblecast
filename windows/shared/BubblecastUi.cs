@@ -315,6 +315,7 @@ namespace Bubblecast
         private readonly TextBox _box;
         private int _lines;
         private RelayPalette _palette;
+        private bool _dimmed;
 
         public FieldHost(TextBox box, int lines)
         {
@@ -333,10 +334,30 @@ namespace Bubblecast
             box.LostFocus += delegate { Invalidate(); };
             box.EnabledChanged += delegate { UpdateBoxColors(); Invalidate(); };
             box.FontChanged += delegate { PerformLayout(); };
-            Click += delegate { if (_box.CanFocus) _box.Focus(); };
+            Click += delegate { if (_box.CanFocus && !_dimmed) _box.Focus(); };
         }
 
         public int PreferredWidth { get; set; }
+
+        /// <summary>
+        /// Shows the field as unavailable without disabling the TextBox: Windows paints a disabled edit
+        /// control in fixed system colors (a white box in dark mode), so a dimmed field is read-only,
+        /// out of the tab order, and drawn in muted colors instead.
+        /// </summary>
+        public bool Dimmed
+        {
+            get { return _dimmed; }
+            set
+            {
+                if (_dimmed == value) return;
+                _dimmed = value;
+                _box.ReadOnly = value;
+                _box.TabStop = !value;
+                Cursor = value ? Cursors.Default : Cursors.IBeam;
+                UpdateBoxColors();
+                Invalidate();
+            }
+        }
 
         /// <summary>Visible text lines; changing it resizes the field and re-lays out its parent.</summary>
         public int VisibleLines
@@ -396,7 +417,7 @@ namespace Bubblecast
         {
             if (_palette == null) return;
             _box.BackColor = FieldBackground;
-            _box.ForeColor = _palette.Foreground;
+            _box.ForeColor = _dimmed ? _palette.MutedForeground : _palette.Foreground;
         }
 
         protected override void OnPaintBackground(PaintEventArgs e)
@@ -410,7 +431,7 @@ namespace Bubblecast
             bool focused = _box.Focused;
             using (GraphicsPath path = UiPaint.RoundedRect(bounds, radius))
             using (SolidBrush fill = new SolidBrush(FieldBackground))
-            using (Pen border = new Pen(focused ? _palette.Ring : _palette.Input))
+            using (Pen border = new Pen(focused ? _palette.Ring : _dimmed ? _palette.Border : _palette.Input))
             {
                 e.Graphics.FillPath(fill, path);
                 e.Graphics.DrawPath(border, path);
