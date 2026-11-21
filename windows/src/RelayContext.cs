@@ -1,23 +1,17 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Net;
-using System.Net.NetworkInformation;
-using System.Net.Security;
 using System.Net.Sockets;
 using System.Reflection;
-using System.Runtime.InteropServices;
 using System.Security.Cryptography;
-using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Drawing;
-using System.Drawing.Drawing2D;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
@@ -145,18 +139,19 @@ namespace Bubblecast
 
             Task.Factory.StartNew(delegate
             {
+                // Waits for Setup's exit request or a second launch. This is a background thread, so it
+                // never keeps the process alive after the tray's Exit.
+                WaitHandle[] handles = { _exitEvent, _commandEvent };
                 while (_running)
                 {
                     try
                     {
-                        int signaled = WaitHandle.WaitAny(new WaitHandle[] { _exitEvent, _commandEvent }, 500);
-                        if (signaled == 0)
+                        if (WaitHandle.WaitAny(handles) == 0)
                         {
                             QueueUiAction(delegate { ExitThread(); });
                             return;
                         }
-                        if (signaled == 1)
-                            QueueUiAction(ShowSettings);
+                        QueueUiAction(ShowSettings);
                     }
                     catch (ObjectDisposedException) { return; }
                 }
@@ -371,7 +366,7 @@ namespace Bubblecast
         {
             long ticks = Interlocked.Read(ref _lastSignedRequestUtcTicks);
             if (ticks == 0) return StatusTone.Neutral;
-            return DateTime.UtcNow - new DateTime(ticks, DateTimeKind.Utc) > TimeSpan.FromMinutes(5) ? StatusTone.Warning : StatusTone.Success;
+            return DateTime.UtcNow - new DateTime(ticks, DateTimeKind.Utc) > MacQuietThreshold ? StatusTone.Warning : StatusTone.Success;
         }
 
         private void UpdateTrayStatus()
@@ -490,40 +485,6 @@ namespace Bubblecast
             {
                 MessageBox.Show("Couldn't open Remote Desktop: " + ex.Message, "Bubblecast", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
-        }
-
-        private static string GetLocalIPv4Addresses()
-        {
-            List<string> likelyLan = new List<string>();
-            List<string> other = new List<string>();
-            foreach (NetworkInterface nic in NetworkInterface.GetAllNetworkInterfaces())
-            {
-                if (nic.OperationalStatus != OperationalStatus.Up)
-                    continue;
-                bool hasDefaultGateway = nic.GetIPProperties().GatewayAddresses.Any(delegate(GatewayIPAddressInformation gateway)
-                {
-                    return gateway.Address != null && !IPAddress.Any.Equals(gateway.Address) && !IPAddress.IPv6Any.Equals(gateway.Address);
-                });
-                string interfaceName = nic.Name + " (" + nic.NetworkInterfaceType + ")";
-                bool virtualOrTunnel = (nic.Name + " " + nic.Description).IndexOf("Hyper-V", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                    (nic.Name + " " + nic.Description).IndexOf("WSL", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                    (nic.Name + " " + nic.Description).IndexOf("VPN", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                    nic.NetworkInterfaceType == NetworkInterfaceType.Tunnel;
-                foreach (UnicastIPAddressInformation address in nic.GetIPProperties().UnicastAddresses)
-                {
-                    if (address.Address.AddressFamily == AddressFamily.InterNetwork &&
-                        !IPAddress.IsLoopback(address.Address) &&
-                        !address.Address.ToString().StartsWith("169.254."))
-                    {
-                        string entry = interfaceName + ": " + address.Address +
-                            (hasDefaultGateway ? " (likely LAN; default gateway)" : "") +
-                            (virtualOrTunnel ? " (virtual or tunnel adapter)" : "");
-                        (hasDefaultGateway && !virtualOrTunnel ? likelyLan : other).Add(entry);
-                    }
-                }
-            }
-            List<string> addresses = likelyLan.Concat(other).ToList();
-            return addresses.Count == 0 ? "No active IPv4 address found." : String.Join(Environment.NewLine, addresses.ToArray());
         }
 
         /// <summary>Announces this PC to Macs on the network (or stops) to match the current settings.</summary>

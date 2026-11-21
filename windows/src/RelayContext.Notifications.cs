@@ -1,31 +1,18 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
-using System.IO;
 using System.Globalization;
 using System.Linq;
-using System.Net;
-using System.Net.NetworkInformation;
-using System.Net.Security;
-using System.Net.Sockets;
-using System.Reflection;
-using System.Runtime.InteropServices;
-using System.Security.Cryptography;
-using System.Security.Authentication;
-using System.Security.Cryptography.X509Certificates;
-using System.Text;
 using System.Threading;
-using System.Threading.Tasks;
-using System.Drawing;
-using System.Drawing.Drawing2D;
 using System.Windows.Forms;
-using Microsoft.Win32;
 
 namespace Bubblecast
 {
     // Quiet hours, muted senders, batching, and showing notifications.
     internal sealed partial class RelayContext
     {
+        private const string TestNotificationTitle = "Test from Mac ✓";
+        private const string TestNotificationText = "Test notification accepted.";
+
         private void QueueToast(string sender, string preview, bool isTest = false)
         {
             QueueUiAction(delegate
@@ -41,7 +28,7 @@ namespace Bubblecast
                     return;
                 }
                 _pendingNotifications.Add(isTest
-                    ? new PendingNotification { Sender = "Test from Mac ✓", Preview = "Test notification accepted.", IsTest = true }
+                    ? new PendingNotification { IsTest = true }
                     : new PendingNotification { Sender = sender, Preview = preview });
                 if (!_toastBatchTimer.Enabled)
                     _toastBatchTimer.Start();
@@ -72,21 +59,20 @@ namespace Bubblecast
             _toastBatchTimer.Stop();
             if (_pendingNotifications.Count == 0) return;
 
-            int count = _pendingNotifications.Count;
             List<PendingNotification> batch = _pendingNotifications.ToList();
             _pendingNotifications.Clear();
-            if (count == 1 && batch[0].IsTest)
+            string title;
+            string text;
+            if (batch.Count == 1 && batch[0].IsTest)
             {
-                _tray.BalloonTipTitle = "Test from Mac ✓";
-                _tray.BalloonTipText = "Test notification accepted.";
+                title = TestNotificationTitle;
+                text = TestNotificationText;
             }
-            else if (count == 1)
+            else if (batch.Count == 1)
             {
                 PendingNotification item = batch[0];
-                _tray.BalloonTipTitle = String.IsNullOrEmpty(item.Sender)
-                    ? "iMessage"
-                    : "iMessage — " + DisplayTextSanitizer.SanitizeAndTruncate(item.Sender, 40);
-                _tray.BalloonTipText = !String.IsNullOrEmpty(item.Preview)
+                title = String.IsNullOrEmpty(item.Sender) ? "iMessage" : "iMessage — " + DisplayTextSanitizer.SanitizeAndTruncate(item.Sender, 40);
+                text = !String.IsNullOrEmpty(item.Preview)
                     ? item.Preview
                     : (String.IsNullOrEmpty(item.Sender) ? "New message received" : "New message from " + item.Sender);
             }
@@ -94,14 +80,14 @@ namespace Bubblecast
             {
                 List<string> senders = batch.Select(delegate(PendingNotification item) { return item.Sender; })
                     .Where(delegate(string item) { return !String.IsNullOrWhiteSpace(item); })
-                    .Distinct(StringComparer.OrdinalIgnoreCase).Take(3).ToList();
-                _tray.BalloonTipTitle = count.ToString(CultureInfo.InvariantCulture) + " new iMessages";
-                _tray.BalloonTipText = senders.Count == 0
+                    .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                title = batch.Count.ToString(CultureInfo.InvariantCulture) + " new iMessages";
+                text = senders.Count == 0
                     ? "New messages received"
-                    : "From " + String.Join(", ", senders.ToArray()) + (senders.Count < batch.Select(delegate(PendingNotification item) { return item.Sender; }).Where(delegate(string item) { return !String.IsNullOrWhiteSpace(item); }).Distinct(StringComparer.OrdinalIgnoreCase).Count() ? ", and others" : "");
+                    : "From " + String.Join(", ", senders.Take(3).ToArray()) + (senders.Count > 3 ? ", and others" : "");
             }
             RecordRecent(batch);
-            ShowNotification(_tray.BalloonTipTitle, _tray.BalloonTipText, false);
+            ShowNotification(title, text, false);
         }
 
         /// <summary>A Bubblecast status notice (not a message), such as the Mac going quiet.</summary>

@@ -1,23 +1,8 @@
 using System;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.IO;
+using System.Drawing;
 using System.Globalization;
 using System.Linq;
-using System.Net;
-using System.Net.NetworkInformation;
-using System.Net.Security;
-using System.Net.Sockets;
-using System.Reflection;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;
-using System.Security.Authentication;
-using System.Security.Cryptography.X509Certificates;
-using System.Text;
-using System.Threading;
-using System.Threading.Tasks;
-using System.Drawing;
-using System.Drawing.Drawing2D;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
@@ -93,7 +78,7 @@ namespace Bubblecast
             // ── Pairing card: everything the Mac needs, above the fold ──
             CardPanel pairingCard = UiLayout.NewCard("Pairing", "Bubblecast on the Mac can find this PC on your network. Paste the pairing token there.", sectionFont, smallFont);
 
-            string addressText = GetLocalIPv4Addresses();
+            string addressText = NetworkAddresses.DescribeLocalIPv4();
             int addressLines = Math.Max(1, addressText.Split('\n').Length);
             TextBox ips = new TextBox
             {
@@ -660,6 +645,11 @@ namespace Bubblecast
                 fingerprintResetTimer.Dispose();
                 clearTokenTimer.Stop();
                 clearTokenTimer.Dispose();
+            };
+            // The controls use these fonts until the form and its controls are disposed.
+            form.Disposed += delegate
+            {
+                foreach (Font font in new[] { baseFont, titleFont, sectionFont, labelFont, smallFont, monoFont }) font.Dispose();
             };
             return form;
         }
