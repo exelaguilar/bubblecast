@@ -610,6 +610,8 @@ namespace Bubblecast
                 }
                 macPage.ResumeLayout(true);
             };
+            // Lay the Mac page out now, so its cards are in the window when the theme is applied below.
+            updateMacLayout();
             macScroll.Resize += delegate { updateMacLayout(); };
             pages.SelectedIndexChanged += delegate
             {
