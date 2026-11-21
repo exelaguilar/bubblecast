@@ -1,7 +1,10 @@
 import Foundation
 import CryptoKit
+import SQLite3
 
-// Pure-logic checks. The delivery checks drive the app's real DeliveryQueue with a fake clock.
+// Pure-logic checks. The delivery checks drive the app's real DeliveryQueue with a fake clock, and the
+// database checks run the app's real queries against a synthetic database in a temporary folder
+// (never the real chat.db).
 
 private final class FakeClock {
     var now = Date(timeIntervalSince1970: 1_700_000_000)
@@ -278,5 +281,71 @@ check(RelayHMAC.signature(token: testToken, canonical: v2Canonical).count == 64,
 let fixedV2Canonical = RelayProtocolV2.canonical(method: "POST", path: "/notify", timestamp: "1700000000", nonce: "123e4567-e89b-12d3-a456-426614174000", kind: .message, messageID: "0123456789abcdef0123456789abcdef", senderBase64: "SmFuZQ==", previewBase64: "SGVsbG8=")
 check(RelayHMAC.signature(token: testToken, canonical: fixedV2Canonical) == "f4182f094163c132a423b6be497efd9d40e79f57503a19b644d2b2bce3c7f876",
       "v2 notify HMAC matches the protocol vector")
+
+// MessagesDatabase: the app's read-only queries against a synthetic Messages-shaped database.
+let fixtureFolder = FileManager.default.temporaryDirectory.appendingPathComponent("bubblecast-checks-\(UUID().uuidString)")
+try! FileManager.default.createDirectory(at: fixtureFolder, withIntermediateDirectories: true)
+let fixturePath = fixtureFolder.appendingPathComponent("chat.db").path
+let appleNow = Date().timeIntervalSince1970 - 978_307_200
+func appleNanoseconds(secondsAgo: Double) -> Int64 { Int64((appleNow - secondsAgo) * 1e9) }
+var fixture: OpaquePointer?
+let fixtureOpened = sqlite3_open(fixturePath, &fixture)
+check(fixtureOpened == SQLITE_OK, "synthetic database is created in a temporary folder")
+// Columns: ROWID, guid, text, date, date_read, is_read, is_from_me, handle_id, item_type, associated_message_type.
+let fixtureSQL = """
+CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
+CREATE TABLE message (ROWID INTEGER PRIMARY KEY, guid TEXT, text TEXT, date INTEGER, date_read INTEGER DEFAULT 0,
+    is_read INTEGER DEFAULT 0, is_from_me INTEGER, handle_id INTEGER, item_type INTEGER DEFAULT 0,
+    associated_message_type INTEGER DEFAULT 0);
+CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, display_name TEXT, room_name TEXT);
+CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
+INSERT INTO handle VALUES (1, 'synthetic@example.invalid');
+INSERT INTO chat VALUES (1, '', ''), (2, 'Synthetic group', 'room-fixture');
+INSERT INTO message VALUES (1, 'g1', 'Earlier reply', \(appleNanoseconds(secondsAgo: 3600)), 0, 1, 1, 1, 0, 0);
+INSERT INTO message VALUES (2, 'g2', 'Hello   there
+friend', \(appleNanoseconds(secondsAgo: 10)), 0, 0, 0, 1, 0, 0);
+INSERT INTO message VALUES (3, 'g3', 'Mine', \(appleNanoseconds(secondsAgo: 30)), 0, 1, 1, 1, 0, 0);
+INSERT INTO message VALUES (4, 'g4', 'Group hello', \(appleNanoseconds(secondsAgo: 5)), \(appleNanoseconds(secondsAgo: 2)), 1, 0, 1, 0, 0);
+INSERT INTO message VALUES (5, 'g5', '', \(appleNanoseconds(secondsAgo: 4)), 0, 0, 0, 1, 0, 2000);
+INSERT INTO message VALUES (6, 'g6', 'renamed the group', \(appleNanoseconds(secondsAgo: 3)), 0, 0, 0, 1, 2, 0);
+INSERT INTO chat_message_join VALUES (1, 1), (1, 2), (2, 3), (2, 4), (2, 5), (2, 6);
+"""
+let fixturePopulated = sqlite3_exec(fixture, fixtureSQL, nil, nil, nil)
+check(fixturePopulated == SQLITE_OK, "synthetic database is populated")
+sqlite3_close(fixture)
+
+let fixtureDatabase = MessagesDatabase(path: fixturePath)
+check((try? fixtureDatabase.maximumRowID()) == 6, "the database reports its highest ROWID")
+let incoming = (try? fixtureDatabase.incomingMessages(after: 0, includeAssociatedMessages: false)) ?? []
+check(incoming.map(\.rowID) == [2, 4], "only incoming, non-system, non-associated rows are read, oldest first")
+check(incoming.first?.preview == "Hello there friend" && incoming.first?.senderAddress == "synthetic@example.invalid",
+      "previews collapse whitespace and keep the sender address")
+check(incoming.last?.groupName == "Synthetic group" && incoming.first?.groupName == "", "group chats carry their display name")
+check(incoming.first?.timestampUnit == .appleNanoseconds && incoming.first?.messageDate != nil, "message dates are decoded")
+let withAssociated = (try? fixtureDatabase.incomingMessages(after: 0, includeAssociatedMessages: true)) ?? []
+check(withAssociated.map(\.rowID) == [2, 4, 5] && withAssociated.last?.isAssociatedMessage == true &&
+      withAssociated.last?.preview == "Associated message event received",
+      "associated-message rows are included only when asked, with a generic label")
+check(((try? fixtureDatabase.incomingMessages(after: 2, includeAssociatedMessages: false)) ?? []).map(\.rowID) == [4],
+      "reading resumes after the cursor")
+
+let unreadAttention = try? fixtureDatabase.attention(forRowID: 2)
+check(unreadAttention?.isRead == false && abs((unreadAttention?.lastActivity?.timeIntervalSinceNow ?? 0) + 3600) < 5,
+      "an unread message reports the user's last reply in its conversation")
+check(SharedSettings.defaults.shouldSkip(unreadAttention) == false, "an unread message with old activity is sent")
+let readAttention = try? fixtureDatabase.attention(forRowID: 4)
+check(readAttention?.isRead == true && abs((readAttention?.lastActivity?.timeIntervalSinceNow ?? 0) + 30) < 5,
+      "a read message reports its read state and the latest activity among the other messages")
+var activityOnly = SharedSettings.defaults
+activityOnly.skipReadMessages = false
+check(SharedSettings.defaults.shouldSkip(readAttention) && activityOnly.shouldSkip(readAttention),
+      "a read message, or one in a conversation the user just replied in, is skipped")
+fixtureDatabase.close()
+try? FileManager.default.removeItem(at: fixtureFolder)
+
+check(ContactResolver.normalizeAddress(" mailto:Someone@Example.INVALID ") == "someone@example.invalid", "email senders normalize case and mailto:")
+check(ContactResolver.normalizeAddress("tel:+1 (555) 010-0199") == "15550100199", "phone senders normalize to digits")
+check(ContactResolver.phoneNumbersMatch("+1 555 010 0199", "(555) 010-0199"), "phone numbers match with or without the country code")
+check(!ContactResolver.phoneNumbersMatch("010-0199", "(555) 010-0199"), "a short number doesn't match a longer one by suffix")
 }
 }

@@ -146,8 +146,7 @@ internal static class BubblecastSetup
             key.SetValue("NoRepair", 1, RegistryValueKind.DWord);
         }
         reportProgress("Finishing setup…", 95);
-        string launchArguments = "--set-startup=" + (startAtSignIn ? "on" : "off") + (launchAfterInstall ? " --show-settings" : String.Empty);
-        LaunchAsInteractiveUser(appPath, launchArguments);
+        LaunchAsInteractiveUser(appPath, SetupLaunch.Arguments(startAtSignIn, launchAfterInstall));
         reportProgress("Installation complete.", 100);
     }
 
@@ -212,19 +211,7 @@ internal static class BubblecastSetup
 
     private static void CreateShortcut(string path, string target, string workingDirectory, string description, string arguments = "")
     {
-        Type shellType = Type.GetTypeFromProgID("WScript.Shell");
-        if (shellType == null) throw new InvalidOperationException("Windows Script Host is unavailable; a shortcut could not be created.");
-        object shell = Activator.CreateInstance(shellType);
-        object shortcut = shellType.InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { path });
-        Type shortcutType = shortcut.GetType();
-        shortcutType.InvokeMember("TargetPath", BindingFlags.SetProperty, null, shortcut, new object[] { target });
-        shortcutType.InvokeMember("WorkingDirectory", BindingFlags.SetProperty, null, shortcut, new object[] { workingDirectory });
-        shortcutType.InvokeMember("Description", BindingFlags.SetProperty, null, shortcut, new object[] { description });
-        shortcutType.InvokeMember("Arguments", BindingFlags.SetProperty, null, shortcut, new object[] { arguments });
-        shortcutType.InvokeMember("IconLocation", BindingFlags.SetProperty, null, shortcut, new object[] { target + ",0" });
-        shortcutType.InvokeMember("Save", BindingFlags.InvokeMethod, null, shortcut, null);
-        Marshal.ReleaseComObject(shortcut);
-        Marshal.ReleaseComObject(shell);
+        ShellShortcut.Write(path, target, workingDirectory, description, arguments, target + ",0");
     }
 
     private static void Uninstall()

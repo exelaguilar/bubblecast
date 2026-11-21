@@ -151,6 +151,12 @@ internal static class RelayChecks
         Check(LaunchModePolicy.ShouldShowSettings(new string[0]), "explicit app launch opens Settings");
         Check(!LaunchModePolicy.ShouldShowSettings(new string[] { "--background" }), "sign-in launch stays in the notification area");
         Check(!LaunchModePolicy.ShouldShowSettings(new string[] { "--BACKGROUND" }), "background launch argument is case-insensitive");
+        string[] quietAfterSetup = SetupLaunch.Arguments(true, false).Split(' ');
+        Check(quietAfterSetup.Length == 2 && quietAfterSetup[0] == "--set-startup=on" && !LaunchModePolicy.ShouldShowSettings(quietAfterSetup),
+              "Setup restarts the app in the notification area when Settings shouldn't open");
+        string[] settingsAfterSetup = SetupLaunch.Arguments(false, true).Split(' ');
+        Check(settingsAfterSetup.Length == 2 && settingsAfterSetup[0] == "--set-startup=off" && LaunchModePolicy.ShouldShowSettings(settingsAfterSetup),
+              "Setup opens Settings after installing when asked");
         ParsedHttpRequest parsed;
         string validRequest = "GET /health HTTP/1.1\r\nX-Test: value\r\n\r\n";
         Check(BoundedHttpRequestReader.Read(new MemoryStream(Encoding.ASCII.GetBytes(validRequest)), null, out parsed) == HttpRequestReadStatus.Success && parsed.Headers["X-Test"] == "value",

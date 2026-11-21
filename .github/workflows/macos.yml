@@ -1,7 +1,7 @@
 name: macOS app
 
 # Builds Bubblecast for Mac on GitHub's macOS runners:
-# - every push and pull request: self-checks plus a universal build, with the DMG kept as a workflow artifact
+# - every push to main and pull request that changes this app, VERSION, or this workflow: self-checks plus a universal build, with the DMG kept as a workflow artifact
 # - every published release: the DMG and its checksum are attached to that release
 # - manual run with a release tag: builds the branch you run it on and attaches the DMG to that existing release
 #   (use it only when the branch's app source and VERSION match the release)
@@ -9,7 +9,15 @@ name: macOS app
 on:
   push:
     branches: [main]
+    paths:
+      - "macos/**"
+      - VERSION
+      - .github/workflows/macos.yml
   pull_request:
+    paths:
+      - "macos/**"
+      - VERSION
+      - .github/workflows/macos.yml
   release:
     types: [published]
   workflow_dispatch:
@@ -21,6 +29,11 @@ on:
 
 permissions:
   contents: write
+
+# A newer push to the same pull request or branch cancels the older run (releases always finish).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
 
 jobs:
   build:

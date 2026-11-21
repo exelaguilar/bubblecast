@@ -1,25 +1,14 @@
 using System;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.IO;
 using System.Globalization;
-using System.Linq;
+using System.IO;
 using System.Net;
-using System.Net.NetworkInformation;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Reflection;
-using System.Runtime.InteropServices;
-using System.Security.Cryptography;
 using System.Security.Authentication;
-using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Drawing;
-using System.Drawing.Drawing2D;
-using System.Windows.Forms;
-using Microsoft.Win32;
 
 namespace Bubblecast
 {
@@ -50,62 +39,67 @@ namespace Bubblecast
 
         private void ListenLoop()
         {
+            AcceptLoop(Port, false);
+        }
+
+        private void ListenTlsLoop()
+        {
+            AcceptLoop(TlsPort, true);
+        }
+
+        /// <summary>
+        /// Accepts connections on one port until the app exits, reopening the listener after errors or a
+        /// listen-address change. Both ports share the client slots.
+        /// </summary>
+        private void AcceptLoop(int port, bool useTls)
+        {
             int retryDelayMs = 1000;
-            while (_running)
+            while (_running && (!useTls || _tlsCertificate != null))
             {
                 int generation = Volatile.Read(ref _listenerGeneration);
-                TcpListener listener = new TcpListener(ListenIPAddress(), Port);
+                TcpListener listener = new TcpListener(ListenIPAddress(), port);
                 try
                 {
                     listener.Start();
-                    _listener = listener;
+                    if (useTls) _tlsListener = listener; else _listener = listener;
                     retryDelayMs = 1000;
-                    QueueStatus("Listening on TCP " + Port + ListeningOn());
+                    QueueStatus(_tlsCertificate != null
+                        ? "Listening on TCP " + Port + " (HTTP) and " + TlsPort + " (TLS)" + ListeningOn()
+                        : "Listening on TCP " + Port + ListeningOn());
                     while (_running)
                     {
-                        TcpClient client = null;
-                        try
+                        TcpClient client = listener.AcceptTcpClient();
+                        // Every read and write gives up after the request deadline, so a client that
+                        // connects and goes silent (including mid-TLS-handshake) can't hold a slot.
+                        client.ReceiveTimeout = BoundedHttpRequestReader.TotalReadDeadlineMilliseconds;
+                        client.SendTimeout = BoundedHttpRequestReader.TotalReadDeadlineMilliseconds;
+                        if (!_clientSlots.Wait(0))
                         {
-                            client = listener.AcceptTcpClient();
-                            if (!_clientSlots.Wait(0))
+                            if (!useTls)
                             {
-                                WriteResponse(client.GetStream(), "503 Service Unavailable");
-                                client.Close();
-                                client = null;
+                                try { WriteResponse(client.GetStream(), "503 Service Unavailable"); }
+                                catch (IOException) { }
                             }
-                            else
+                            client.Close();
+                            continue;
+                        }
+                        TcpClient accepted = client;
+                        Task.Factory.StartNew(delegate
+                        {
+                            try { HandleClient(accepted, useTls); }
+                            catch (Exception)
                             {
-                                TcpClient accepted = client;
-                                client = null;
-                                Task.Factory.StartNew(delegate
-                                {
-                                    try { HandleClient(accepted, false); }
-                                    catch (SocketException)
-                                    {
-                                        if (_running) QueueStatus("A relay connection ended unexpectedly; the listener is still running.");
-                                    }
-                                    catch (Exception)
-                                    {
-                                        if (_running) QueueStatus("A relay request could not be processed; the listener is still running.");
-                                    }
-                                    finally
-                                    {
-                                        accepted.Close();
-                                        _clientSlots.Release();
-                                    }
-                                }, CancellationToken.None, TaskCreationOptions.None, TaskScheduler.Default);
+                                if (_running)
+                                    QueueStatus(useTls
+                                        ? "A TLS relay connection failed; the listener remains available."
+                                        : "A relay request could not be processed; the listener is still running.");
                             }
-                        }
-                        catch (SocketException)
-                        {
-                            if (_running)
-                                throw;
-                        }
-                        finally
-                        {
-                            if (client != null)
-                                client.Close();
-                        }
+                            finally
+                            {
+                                accepted.Close();
+                                _clientSlots.Release();
+                            }
+                        }, CancellationToken.None, TaskCreationOptions.None, TaskScheduler.Default);
                     }
                 }
                 catch (Exception ex)
@@ -114,7 +108,9 @@ namespace Bubblecast
                         retryDelayMs = 1000;
                     else if (_running)
                     {
-                        QueueStatus("Listener unavailable; retrying in " + (retryDelayMs / 1000) + " sec: " + ex.Message);
+                        QueueStatus(useTls
+                            ? "TLS listener unavailable; HTTP remains available."
+                            : "Listener unavailable; retrying in " + (retryDelayMs / 1000) + " sec: " + ex.Message);
                         Thread.Sleep(retryDelayMs);
                         retryDelayMs = Math.Min(retryDelayMs * 2, 30000);
                     }
@@ -122,53 +118,8 @@ namespace Bubblecast
                 finally
                 {
                     try { listener.Stop(); } catch { }
-                    if (Object.ReferenceEquals(_listener, listener))
-                        _listener = null;
-                }
-            }
-        }
-
-        private void ListenTlsLoop()
-        {
-            int retryDelayMs = 1000;
-            while (_running && _tlsCertificate != null)
-            {
-                int generation = Volatile.Read(ref _listenerGeneration);
-                TcpListener listener = new TcpListener(ListenIPAddress(), TlsPort);
-                try
-                {
-                    listener.Start();
-                    _tlsListener = listener;
-                    retryDelayMs = 1000;
-                    QueueStatus("Listening on TCP " + Port + " (HTTP) and " + TlsPort + " (TLS)" + ListeningOn());
-                    while (_running)
-                    {
-                        TcpClient client = listener.AcceptTcpClient();
-                        if (!_clientSlots.Wait(0)) { client.Close(); continue; }
-                        TcpClient accepted = client;
-                        Task.Factory.StartNew(delegate
-                        {
-                            try { HandleClient(accepted, true); }
-                            catch (Exception) { if (_running) QueueStatus("A TLS relay connection failed; the listener remains available."); }
-                            finally { accepted.Close(); _clientSlots.Release(); }
-                        }, CancellationToken.None, TaskCreationOptions.None, TaskScheduler.Default);
-                    }
-                }
-                catch (Exception)
-                {
-                    if (_running && generation != Volatile.Read(ref _listenerGeneration))
-                        retryDelayMs = 1000;
-                    else if (_running)
-                    {
-                        QueueStatus("TLS listener unavailable; HTTP remains available.");
-                        Thread.Sleep(retryDelayMs);
-                        retryDelayMs = Math.Min(retryDelayMs * 2, 30000);
-                    }
-                }
-                finally
-                {
-                    try { listener.Stop(); } catch { }
-                    if (Object.ReferenceEquals(_tlsListener, listener)) _tlsListener = null;
+                    if (useTls) { if (Object.ReferenceEquals(_tlsListener, listener)) _tlsListener = null; }
+                    else if (Object.ReferenceEquals(_listener, listener)) _listener = null;
                 }
             }
         }
@@ -250,9 +201,8 @@ namespace Bubblecast
                         if (parsed.Headers.TryGetValue("X-Relay-Nonce", out nonce))
                             settingsHeaders = SignedSharedSettingsHeaders(nonce);
                         RecordAcceptedRequest(path);
-                        IPEndPoint remote = client.Client.RemoteEndPoint as IPEndPoint;
-                        if (remote != null && remote.Address.AddressFamily == AddressFamily.InterNetwork)
-                            QueueLatestMacAddress(remote.Address.ToString());
+                        if (remoteEndpoint != null && remoteEndpoint.Address.AddressFamily == AddressFamily.InterNetwork)
+                            QueueLatestMacAddress(remoteEndpoint.Address.ToString());
                         if (path == "/notify" && !verdict.DuplicateMessage)
                             QueueToast(DecodeHeader(senderBase64, 80), DecodeHeader(previewBase64, 180), verdict.Kind == "test");
                     }

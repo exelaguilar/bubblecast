@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.2.1 — November 2026
+
+### Fixed
+
+- **Windows:** a device that connected to the receiver and then went silent (for example, stalled in the TLS handshake) could tie up its connections and block the Mac's alerts. Silent connections now close after 3 seconds.
+- **Windows Setup:** with **Open Settings after setup** off, an update left Bubblecast stopped until the next sign-in. Setup now always starts it, quietly in the notification area when Settings shouldn't open.
+- **Mac:** after the Mac sent newer settings to Windows, the sharing line could say Windows doesn't share settings for up to a minute.
+
+### Changed
+
+- **Mac:** the notification settings are split into **What alerts show** and **When to stay quiet**, the same two groups as the **Mac** page on Windows. Success, warning, and error text in light mode is darker for readability.
+
+### Under the hood
+
+- Windows: one accept loop for HTTP and TLS, one shortcut writer shared with Setup, the adapter list moved into `NetworkAddresses`, Settings fonts disposed on close, and the command thread no longer wakes twice a second.
+- Mac: the settings checks now run the app's Messages database queries (incoming rows, associated rows, read state, last activity) against a synthetic database, and contact-address matching.
+- CI skips docs-only changes and cancels superseded runs.
+
 ## 1.2.0 — November 2026
 
 ### New

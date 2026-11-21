@@ -11,9 +11,9 @@ Setup installs to `C:\Program Files\Bubblecast` by default and lets you choose:
 - Start menu shortcuts (app and uninstall)
 - A desktop shortcut
 - Start at sign-in (quietly, in the notification area)
-- Open Settings when setup finishes
+- Open Settings when setup finishes (otherwise the app starts quietly in the notification area)
 
-When updating, Setup asks the running app to close, shows progress, stages the new app beside the old one, and replaces it only after staging succeeds. If the app doesn't close, Setup explains how to close it and offers **Retry**. Cancel or Escape closes Setup whenever an install isn't running. Setup never adds firewall rules.
+Setup always starts the app when it finishes. When updating, Setup asks the running app to close, shows progress, stages the new app beside the old one, and replaces it only after staging succeeds. If the app doesn't close, Setup explains how to close it and offers **Retry**. Cancel or Escape closes Setup whenever an install isn't running. Setup never adds firewall rules.
 
 ## Settings
 

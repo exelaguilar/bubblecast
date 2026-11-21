@@ -25,8 +25,10 @@ esac
 
 if [ "$MODE" = "test" ]; then
     echo "Running Bubblecast pure-logic checks…"
-    swiftc -O -framework Foundation -framework CryptoKit -framework Security -o "$BUILD_TEMP/CoreChecks" \
+    swiftc -O -framework Foundation -framework CryptoKit -framework Security -framework Contacts -lsqlite3 -o "$BUILD_TEMP/CoreChecks" \
         "$SOURCE_DIR/Tests/CoreChecks.swift" \
+        "$SOURCE_DIR/Sources/Core/MessagesDatabase.swift" \
+        "$SOURCE_DIR/Sources/Core/ContactResolver.swift" \
         "$SOURCE_DIR/Sources/Core/KeychainTokenStore.swift" \
         "$SOURCE_DIR/Sources/Core/RelaySettings.swift" \
         "$SOURCE_DIR/Sources/Core/SharedSettings.swift" \
