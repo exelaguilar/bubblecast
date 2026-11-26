@@ -54,7 +54,7 @@ Bubblecast on Windows announces itself as `_bubblecast._tcp` on the local networ
 Notification settings are in two cards, the same two groups as the **Mac** page in Bubblecast for Windows: **What alerts show** (sender names, previews, associated-message rows) and **When to stay quiet** (skip read messages, quiet while active, ignore old messages).
 
 - **Sender contact name** looks up the sender in Contacts. **Sender name overrides** (under Advanced) take priority: one `address = name` per line.
-- **Message previews** include the message text (up to 180 characters). Previews may appear in Windows notification history.
+- **Message previews** include the message text (up to 180 characters). They're off on a new install; turning them on sends message text to the PC, where it may appear in Windows notification history. Previews made of unusually long characters (such as some emoji) are shortened to fit the protocol's size limit.
 - **Ignore old or iCloud-synced messages** skips rows older than **Maximum message age** (default 10 minutes) and rows with unreadable timestamps. Turn it off only to deliver a backlog.
 - **Include associated-message rows** is off by default. These rows can include reactions; Apple doesn't document their types, so they get a generic label when they have no text.
 - **Skip messages I've already read** (on by default) checks just before sending whether the message is marked read — on the Mac, or on another device through iCloud — and drops it. Because new messages are sent within seconds, this mostly catches messages that waited while Windows was unreachable. A conversation left open in Messages on the Mac counts as read, so keep Messages on no conversation (or closed) in a headless VM.

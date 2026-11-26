@@ -21,7 +21,7 @@ For each request, the Mac sends these headers:
 - `X-Relay-Time`: decimal Unix time in whole seconds.
 - `X-Relay-Nonce`: a lowercase UUID string, used once.
 - `X-Relay-Signature`: lowercase hexadecimal HMAC-SHA256.
-- `X-Sender-Base64` and `X-Preview-Base64`: optional standard Base64 of the corresponding UTF-8 text. Omit a header when its text is empty. `/health` uses empty sender and preview fields.
+- `X-Sender-Base64` and `X-Preview-Base64`: optional standard Base64 of the corresponding UTF-8 text. Omit a header when its text is empty. `/health` uses empty sender and preview fields. Windows rejects a sender header over 1,024 Base64 characters or a preview header over 4,096 as oversize, so the Mac keeps the UTF-8 text within 768 and 3,072 bytes, cutting at a whole character.
 
 For v1, the canonical UTF-8 string is the following five values joined by one LF (`0A`) byte, with no leading or trailing LF:
 
@@ -138,7 +138,7 @@ rev=1700000000000;names=1;previews=0;old=1;age=10;reactions=0;read=1;active=1;ac
 | Key | Meaning |
 | --- | --- |
 | `rev` | Revision: Unix time in milliseconds of the last edit. Required. `0` means "nothing yet". |
-| `names`, `previews`, `reactions` | Sender names, message previews, associated-message rows (`1`/`0`). |
+| `names`, `previews`, `reactions` | Sender names, message previews, associated-message rows (`1`/`0`). A missing `previews` means off. |
 | `old`, `age` | Ignore old messages, and the maximum age in minutes (1–1440). |
 | `read` | Skip messages already marked read. |
 | `active`, `activemin` | Stay quiet in a conversation with recent activity, and for how many minutes (1–60). |

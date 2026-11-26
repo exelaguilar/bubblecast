@@ -24,6 +24,25 @@ enum RelayProtocolV2 {
         ["v2", method, path, timestamp, nonce, kind.rawValue, messageID, senderBase64, previewBase64].joined(separator: "\n")
     }
 
+    /// UTF-8 byte budgets that fit Windows' Base64 header limits (1,024 and 4,096 characters).
+    static let maximumSenderBytes = 768
+    static let maximumPreviewBytes = 3072
+
+    /// `text` cut at a whole character so its UTF-8 form fits in `limit` bytes. An alert over budget
+    /// would be rejected by Windows and retried forever, holding up the alerts behind it.
+    static func truncated(_ text: String, toUTF8Bytes limit: Int) -> String {
+        guard text.utf8.count > limit else { return text }
+        var used = 0
+        var end = text.startIndex
+        for character in text {
+            let size = character.utf8.count
+            if used + size > limit { break }
+            used += size
+            end = text.index(after: end)
+        }
+        return String(text[..<end])
+    }
+
     static func messageID(token: String, guid: String) -> String {
         String(RelayHMAC.signature(token: token, canonical: "msgid\n" + guid).prefix(32))
     }

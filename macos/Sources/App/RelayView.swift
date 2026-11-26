@@ -245,7 +245,7 @@ struct RelayView: View {
                           isOn: $model.includeSenderNames)
                 Hairline()
                 SwitchRow(title: "Message previews",
-                          detail: "Include message text. Previews may appear in Windows notification history.",
+                          detail: "Off by default. Sends message text to the PC, where it may appear in Windows notification history.",
                           isOn: $model.includeMessagePreviews)
                 Hairline()
                 SwitchRow(title: "Include associated-message rows",

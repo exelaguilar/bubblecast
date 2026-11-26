@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **Message previews are off on a new install**, as the README always promised. An existing Mac keeps the choice it already has. A missing `previews` value in shared settings now means off on both sides.
+
+### Fixed
+
+- **Mac:** an alert whose sender or preview was too large for Windows (for example, a preview full of multi-part emoji) was rejected and retried every minute, holding up every alert behind it. The Mac now shortens the text to fit, at a whole character.
+- **Mac:** after a Messages database read error, the database connection could stay open and leak instead of closing.
+
 ## 1.2.1 — November 2026
 
 ### Fixed

@@ -16,7 +16,8 @@ namespace Bubblecast
         /// <summary>Milliseconds since 1970 when these values were last edited; 0 means never shared.</summary>
         public long Revision;
         public bool IncludeSenderNames = true;
-        public bool IncludeMessagePreviews = true;
+        /// <summary>Off unless turned on, matching the Mac's default.</summary>
+        public bool IncludeMessagePreviews;
         public bool SuppressOldMessages = true;
         public int MaximumMessageAgeMinutes = 10;
         public bool NotifyForReactions;

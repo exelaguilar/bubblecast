@@ -92,6 +92,8 @@ internal static class RelayChecks
         SharedSettings parsed;
         Check(SharedSettings.TryParse(text, out parsed) && parsed.Revision == 1700000000000 && !parsed.IncludeMessagePreviews && parsed.ActiveMinutes == 2 && parsed.Encode() == text,
               "shared settings round-trip in the documented order");
+        Check(!new SharedSettings().IncludeMessagePreviews && SharedSettings.TryParse("rev=5", out parsed) && !parsed.IncludeMessagePreviews,
+              "previews are off unless turned on, matching the Mac");
         Check(SharedSettings.TryParse("rev=5;future=9", out parsed) && parsed.Revision == 5 && parsed.SameValues(new SharedSettings()),
               "unknown shared-settings keys are ignored and missing keys use defaults");
         Check(!SharedSettings.TryParse("names=1", out parsed) && !SharedSettings.TryParse("rev=x", out parsed) && !SharedSettings.TryParse("rev=1;age", out parsed) && !SharedSettings.TryParse("rev=-1", out parsed),

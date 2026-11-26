@@ -19,10 +19,12 @@ struct SharedSettings: Equatable {
     var quietWhileActive: Bool
     var activeMinutes: Int
 
+    /// Previews start off, so message text leaves the Mac only after someone turns them on. Pairing saves
+    /// every setting, so an existing Mac keeps the choice it already has.
     static let defaults = SharedSettings(
         revision: 0,
         includeSenderNames: true,
-        includeMessagePreviews: true,
+        includeMessagePreviews: false,
         suppressOldMessages: true,
         maximumMessageAgeMinutes: 10,
         notifyForReactions: false,
