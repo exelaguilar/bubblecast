@@ -187,6 +187,18 @@ var defaultsAtRevision5 = SharedSettings.defaults
 defaultsAtRevision5.revision = 5
 check(SharedSettings.parse("rev=5;future=9") == defaultsAtRevision5,
       "unknown shared-settings keys are ignored and missing keys use defaults")
+check(!SharedSettings.defaults.includeMessagePreviews && SharedSettings.parse("rev=5")?.includeMessagePreviews == false,
+      "previews are off unless turned on")
+let familyEmoji = "👨‍👩‍👧‍👦" // one character, 25 UTF-8 bytes
+let longPreview = String(repeating: familyEmoji, count: 180)
+let trimmedPreview = RelayProtocolV2.truncated(longPreview, toUTF8Bytes: RelayProtocolV2.maximumPreviewBytes)
+check(trimmedPreview.utf8.count <= RelayProtocolV2.maximumPreviewBytes && trimmedPreview.count == RelayProtocolV2.maximumPreviewBytes / 25 &&
+      trimmedPreview.allSatisfy { $0 == Character(familyEmoji) },
+      "a preview over the wire budget is cut at a whole character")
+check(Data(trimmedPreview.utf8).base64EncodedString().count <= 4096 &&
+      Data(RelayProtocolV2.truncated(String(repeating: "é", count: 1000), toUTF8Bytes: RelayProtocolV2.maximumSenderBytes).utf8).base64EncodedString().count <= 1024,
+      "trimmed sender and preview fit Windows' Base64 header limits")
+check(RelayProtocolV2.truncated("Hello", toUTF8Bytes: 3072) == "Hello", "text within budget is unchanged")
 check(SharedSettings.parse("names=1") == nil && SharedSettings.parse("rev=x") == nil && SharedSettings.parse("rev=1;age") == nil,
       "shared settings without a revision or with malformed pairs are rejected")
 check(SharedSettings.parse("rev=1;age=99999;activemin=0")?.maximumMessageAgeMinutes == 1440 &&
@@ -233,6 +245,11 @@ let settingsSnapshot = RelaySettings(
 )
 try! settingsSnapshot.save(to: testDefaults, tokenStore: testTokenStore)
 check(RelaySettings.load(from: testDefaults, tokenStore: testTokenStore) == settingsSnapshot, "saved settings reload as an immutable snapshot")
+check(RelaySettings.load(from: testDefaults, tokenStore: testTokenStore).includeMessagePreviews, "an existing install keeps previews it turned on")
+let freshSuiteName = "local.bubblecast.CoreChecks.fresh.\(UUID().uuidString)"
+let freshDefaults = UserDefaults(suiteName: freshSuiteName)!
+check(!RelaySettings.load(from: freshDefaults, tokenStore: FakeTokenStore()).includeMessagePreviews, "a new install starts with previews off")
+freshDefaults.removePersistentDomain(forName: freshSuiteName)
 check(testTokenStore.token == settingsSnapshot.pairingToken && testDefaults.string(forKey: "pairingToken") == nil,
       "pairing token is stored by the token store and not in UserDefaults")
 testDefaults.removePersistentDomain(forName: testSuiteName)

@@ -98,6 +98,8 @@ final class RelayClient {
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.timeoutInterval = 5
+        let sender = RelayProtocolV2.truncated(sender, toUTF8Bytes: RelayProtocolV2.maximumSenderBytes)
+        let preview = RelayProtocolV2.truncated(preview, toUTF8Bytes: RelayProtocolV2.maximumPreviewBytes)
         let senderBase64 = sender.isEmpty ? "" : Data(sender.utf8).base64EncodedString()
         // For `settings`, the settings text is signed in the preview's place and sent in its own header.
         let previewBase64 = kind == .settings ? settingsText : (preview.isEmpty ? "" : Data(preview.utf8).base64EncodedString())

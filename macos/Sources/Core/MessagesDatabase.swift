@@ -33,7 +33,9 @@ final class MessagesDatabase {
     }
 
     func close() {
-        if let database { sqlite3_close(database) }
+        // close_v2 frees the connection once any statement still open (finalized by a caller's `defer`
+        // after `failure` returns) is finished; plain close would fail and leak the handle.
+        if let database { sqlite3_close_v2(database) }
         database = nil
         openedFileIdentity = nil
         schema = nil
